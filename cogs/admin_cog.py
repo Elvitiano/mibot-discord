@@ -153,6 +153,25 @@ class AdminCog(commands.Cog, name="Administración"):
         except Exception as e:
             await ctx.send(f"❌ Ocurrió un error durante la exportación: {e}")
 
+    def _do_import(self, data_to_import):
+        """Helper síncrono para importar datos sin bloquear el bot."""
+        report = ""
+        with sqlite3.connect('memoria_bot.db', detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+            cursor = conn.cursor()
+            for table_name in TABLES_TO_MIGRATE:
+                if table_name in data_to_import:
+                    rows = data_to_import[table_name]
+                    if not rows: continue
+                    count = 0
+                    for row in rows:
+                        columns = ', '.join(row.keys())
+                        placeholders = ', '.join('?' for _ in row)
+                        query = f"INSERT OR REPLACE INTO {table_name} ({columns}) VALUES ({placeholders})"
+                        cursor.execute(query, tuple(row.values()))
+                        count += 1
+                    report += f"✅ Tabla `{table_name}`: Se importaron {count} registros.\n"
+        return report
+
     @commands.command(name='importar-config', help='(Dueño) Importa la configuración desde un archivo JSON.')
     @commands.is_owner()
     async def importar_config(self, ctx):
@@ -173,7 +192,5 @@ class AdminCog(commands.Cog, name="Administración"):
         except Exception as e:
             await ctx.send(f"❌ Ocurrió un error durante la importación: {e}")
 
-async def setup(bot):
-    await bot.add_cog(AdminCog(bot))
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))
