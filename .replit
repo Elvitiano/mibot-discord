@@ -1,4 +1,5 @@
 run = "python3 bot.py"
+modules = ["python-3.11"]
 
 [workflows]
 runButton = "Ejecutar Bot Discord"
@@ -20,3 +21,7 @@ mode = "sequential"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "poetry run python bot.py"
+
+[[ports]]
+localPort = 8080
+externalPort = 80
