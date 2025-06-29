@@ -1,15 +1,22 @@
-entrypoint = "main.py"
-modules = ["python-3.11"]
+run = "python3 bot.py"
 
-[nix]
-channel = "stable-24_05"
+[workflows]
+runButton = "Ejecutar Bot Discord"
 
-[unitTest]
-language = "python3"
+[[workflows.workflow]]
+name = "Ejecutar Bot Discord"
+author = 39659945
+mode = "sequential"
 
-[gitHubImport]
-requiredFiles = [".replit", "replit.nix"]
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python bot.py"
 
-[deployment]
-run = ["python3", "main.py"]
-deploymentTarget = "cloudrun"
+[[workflows.workflow]]
+name = "Bot con Poetry"
+author = 39659945
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "poetry run python bot.py"
