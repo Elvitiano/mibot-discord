@@ -6,3 +6,4 @@ elevenlabs
 Unidecode
 Flask
 pytz
+psycopg2-binary

@@ -1,15 +1,13 @@
 import discord
 from discord.ext import commands
-import sqlite3
+from utils.db_manager import db_execute
 
 class HelpView(discord.ui.View):
-    def __init__(self, context, mapping):
+    def __init__(self, context, mapping, visible_categories):
         super().__init__(timeout=120.0)
         self.context = context
         self.mapping = mapping
         self.message = None
-        
-        visible_categories = self._get_visible_categories()
         self.add_item(CategorySelect(visible_categories))
 
     async def on_timeout(self):
@@ -18,49 +16,6 @@ class HelpView(discord.ui.View):
                 await self.message.edit(view=None)
             except discord.HTTPException:
                 pass
-
-    def _get_visible_categories(self):
-        with sqlite3.connect('memoria_bot.db', detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT nombre_comando, estado FROM comandos_config")
-            configs = {row[0]: row[1] for row in cursor.fetchall()}
-            cursor.execute("SELECT nombre_comando FROM permisos_comandos WHERE user_id = ?", (self.context.author.id,))
-            perms = [row[0] for row in cursor.fetchall()]
-            cursor.execute("SELECT nombre_comando FROM comandos_dinamicos ORDER BY nombre_comando ASC")
-            custom_cmds = cursor.fetchall()
-
-        es_admin = self.context.author.guild_permissions.administrator
-        
-        all_categories = {
-            "Gestión de Operadores": ['apodo', 'verapodo', 'quitarapodo', 'listaapodos', 'asignar', 'desasignar', 'misperfiles', 'lm', 'sincronizar-perfiles', 'desincronizar-perfiles'],
-            "Estadísticas y Registros": ['estadisticas', 'registrolm', 'exito', 'verexitos'],
-            "Gestión de Perfiles (IA)": ['crearperfil', 'borrarperfil', 'listaperfiles', 'agghistorial', 'verinfo'],
-            "Análisis con IA": ['reply', 'consejo', 'preguntar'],
-            "Audio (ElevenLabs)": ['sync_elevenlabs', 'audio', 'audiolab'],
-            "Memoria del Bot": ['guardar', 'buscar', 'resumir'],
-            "Tareas Programadas": ['programar', 'programar-ia', 'programar-serie', 'tareas', 'borrartarea'],
-            "Administración General": ['backup', 'privatizar', 'publicar', 'permitir', 'denegar', 'estado_comandos', 'anuncio', 'aggregla', 'listareglas', 'borrarregla', 'exportar-config', 'importar-config'],
-            "Comandos Personalizados": [cmd[0] for cmd in custom_cmds]
-        }
-
-        visible_categories = {}
-        for cat_name, cmd_list in all_categories.items():
-            visible_cmds = []
-            if not cmd_list: continue
-
-            for cmd_name in cmd_list:
-                command = self.context.bot.get_command(cmd_name)
-                if command and not command.hidden:
-                    estado_cmd = configs.get(command.name, 'publico')
-                    if es_admin or estado_cmd == 'publico' or command.name in perms:
-                        visible_cmds.append(command)
-                elif cat_name == "Comandos Personalizados":
-                    visible_cmds.append(cmd_name)
-
-            if visible_cmds:
-                visible_categories[cat_name] = visible_cmds
-        
-        return visible_categories
 
 class CategorySelect(discord.ui.Select):
     def __init__(self, categories):
@@ -91,13 +46,58 @@ class CategorySelect(discord.ui.Select):
         await interaction.response.edit_message(embed=embed)
 
 class MyHelpCommand(commands.HelpCommand):
+    async def _get_visible_categories(self):
+        """Obtiene las categorías y comandos visibles para el usuario de forma asíncrona."""
+        configs_rows = await db_execute("SELECT nombre_comando, estado FROM comandos_config", fetch='all')
+        configs = {row['nombre_comando']: row['estado'] for row in configs_rows} if configs_rows else {}
+        
+        perms_rows = await db_execute("SELECT nombre_comando FROM permisos_comandos WHERE user_id = %s", (self.context.author.id,), fetch='all')
+        perms = [row['nombre_comando'] for row in perms_rows] if perms_rows else []
+
+        custom_cmds_rows = await db_execute("SELECT nombre_comando FROM comandos_dinamicos ORDER BY nombre_comando ASC", fetch='all')
+        custom_cmds = [row['nombre_comando'] for row in custom_cmds_rows] if custom_cmds_rows else []
+
+        es_admin = self.context.author.guild_permissions.administrator
+        
+        all_categories = {
+            "Gestión de Operadores": ['apodo', 'verapodo', 'quitarapodo', 'listaapodos', 'asignar', 'desasignar', 'misperfiles', 'lm', 'sincronizar-perfiles', 'desincronizar-perfiles'],
+            "Estadísticas y Registros": ['estadisticas', 'registrolm', 'exito', 'verexitos'],
+            "Gestión de Perfiles (IA)": ['crearperfil', 'borrarperfil', 'listaperfiles', 'agghistorial', 'verinfo'],
+            "Análisis con IA": ['reply', 'consejo', 'preguntar'],
+            "Audio (ElevenLabs)": ['sync_elevenlabs', 'audio', 'audiolab'],
+            "Memoria del Bot": ['guardar', 'buscar', 'resumir'],
+            "Tareas Programadas": ['programar', 'programar-ia', 'programar-serie', 'tareas', 'borrartarea'],
+            "Administración General": ['backup', 'privatizar', 'publicar', 'permitir', 'denegar', 'estado_comandos', 'anuncio', 'aggregla', 'listareglas', 'borrarregla', 'exportar-config', 'importar-config'],
+            "Comandos Personalizados": custom_cmds
+        }
+
+        visible_categories = {}
+        for cat_name, cmd_list in all_categories.items():
+            visible_cmds = []
+            if not cmd_list: continue
+
+            for cmd_name in cmd_list:
+                command = self.context.bot.get_command(cmd_name)
+                if command and not command.hidden:
+                    estado_cmd = configs.get(command.name, 'publico')
+                    if es_admin or estado_cmd == 'publico' or command.name in perms:
+                        visible_cmds.append(command)
+                elif cat_name == "Comandos Personalizados" and cmd_name in custom_cmds:
+                    visible_cmds.append(cmd_name)
+
+            if visible_cmds:
+                visible_categories[cat_name] = visible_cmds
+        
+        return visible_categories
+
     def get_command_signature(self, command):
         return f'{self.context.prefix}{command.name} {command.signature}'
 
     async def send_bot_help(self, mapping):
         embed = discord.Embed(title="🤖 Menú de Ayuda de MiBotGemini 🤖", color=discord.Color.dark_purple())
         embed.description = "Selecciona una categoría del menú desplegable para ver sus comandos.\nUsa `!help <comando>` para obtener información detallada sobre un comando específico."
-        view = HelpView(self.context, mapping)
+        visible_categories = await self._get_visible_categories()
+        view = HelpView(self.context, mapping, visible_categories)
         view.message = await self.get_destination().send(embed=embed, view=view)
 
     async def send_command_help(self, command):
@@ -123,13 +123,10 @@ class MyHelpCommand(commands.HelpCommand):
         await self.get_destination().send(embed=embed)
 
     async def command_not_found(self, string):
-        with sqlite3.connect('memoria_bot.db', detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT respuesta_comando, creador_nombre FROM comandos_dinamicos WHERE nombre_comando = ?", (string,))
-            result = cursor.fetchone()
+        result = await db_execute("SELECT respuesta_comando, creador_nombre FROM comandos_dinamicos WHERE nombre_comando = %s", (string,), fetch='one')
         
         if result:
-            respuesta, creador = result
+            respuesta, creador = result['respuesta_comando'], result['creador_nombre']
             embed = discord.Embed(title=f"Ayuda para Comando Personalizado: `!{string}`", color=discord.Color.dark_blue())
             embed.add_field(name="Respuesta", value=f"```{respuesta}```", inline=False)
             embed.add_field(name="Creador", value=creador, inline=False)
