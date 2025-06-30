@@ -1,50 +1,50 @@
 import discord
 from discord.ext import commands
-from datetime import datetime, date
-import json
-import io
-import psycopg2
 import asyncio
-from unidecode import unidecode
-from utils.db_manager import db_execute, get_db_connection
-
-TABLES_TO_MIGRATE = [
-    'personas', 'datos_persona', 'reglas_ia', 
-    'permisos_comandos', 'comandos_config', 
-    'operador_perfil', 'apodos_operador', 'comandos_dinamicos'
-]
+from utils.db_manager import db_execute
 
 class AdminCog(commands.Cog, name="Administración"):
     """Comandos para la administración del bot y del servidor."""
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name='backup', help='Crea una copia de seguridad de la base de datos.')
-    @commands.is_owner()
-    async def backup(self, ctx):
-        await ctx.send("❌ El comando backup no está disponible con la base de datos en la nube. Usa `!exportar-config` en su lugar.")
-
-    @commands.command(name='privatizar', help='Hace que un comando sea de uso restringido.')
+    @commands.command(name='status', help='Realiza un chequeo de salud del bot y sus conexiones.')
     @commands.has_permissions(administrator=True)
-    async def privatizar(self, ctx, nombre_comando: str):
-        cmd = self.bot.get_command(nombre_comando.lower())
-        if not cmd or cmd.name in ['privatizar', 'publicar', 'permitir', 'denegar', 'estado_comandos', 'backup']:
-            await ctx.send(f"❌ No se puede privatizar `!{nombre_comando}`."); return
-        await db_execute("INSERT INTO comandos_config (nombre_comando, estado) VALUES (%s, %s) ON CONFLICT (nombre_comando) DO UPDATE SET estado = EXCLUDED.estado", (cmd.name, 'privado'))
-        await ctx.send(f"🔒 El comando `!{cmd.name}` ahora es privado.")
+    async def status(self, ctx):
+        """Verifica el estado de las conexiones críticas del bot."""
+        embed = discord.Embed(title="🩺 Chequeo de Salud del Bot 🩺", color=discord.Color.blue())
+        
+        # 1. Chequeo de la Base de Datos
+        try:
+            # Ejecuta una consulta simple para verificar la conexión.
+            await db_execute("SELECT 1")
+            embed.add_field(name="Base de Datos (Supabase)", value="✅ Conectada", inline=False)
+        except Exception as e:
+            embed.add_field(name="Base de Datos (Supabase)", value=f"❌ Falló: {e}", inline=False)
 
-    @commands.command(name='publicar', help='Hace que un comando sea de uso público.')
-    @commands.has_permissions(administrator=True)
-    async def publicar(self, ctx, nombre_comando: str):
-        cmd = self.bot.get_command(nombre_comando.lower())
-        if not cmd: await ctx.send(f"❌ No existe el comando `!{nombre_comando}`."); return
-        await db_execute("INSERT INTO comandos_config (nombre_comando, estado) VALUES (%s, %s) ON CONFLICT (nombre_comando) DO UPDATE SET estado = EXCLUDED.estado", (cmd.name, 'publico'))
-        await ctx.send(f"🌍 El comando `!{cmd.name}` ahora es público.")
+        # 2. Chequeo de IA (Gemini)
+        try:
+            # count_tokens es una llamada síncrona, no necesita 'await'.
+            self.bot.gemini_model.count_tokens("test")
+            embed.add_field(name="IA (Gemini)", value="✅ Operacional", inline=False)
+        except Exception as e:
+            embed.add_field(name="IA (Gemini)", value=f"❌ Falló: {e}", inline=False)
 
-    @commands.command(name='permitir', help='Concede a un usuario permiso para usar un comando privado.')
-    @commands.has_permissions(administrator=True)
-    async def permitir(self, ctx, miembro: discord.Member, nombre_comando: str):
-        cmd_name = nombre_comando.lower()
+        # 3. Chequeo de Audio (ElevenLabs)
+        if self.bot.elevenlabs_client:
+            try:
+                # Es una llamada de red, se ejecuta en un hilo para no bloquear.
+                await asyncio.to_thread(self.bot.elevenlabs_client.models.get_all)
+                embed.add_field(name="Audio (ElevenLabs)", value="✅ Operacional", inline=False)
+            except Exception as e:
+                embed.add_field(name="Audio (ElevenLabs)", value=f"❌ Falló: {e}", inline=False)
+        else:
+            embed.add_field(name="Audio (ElevenLabs)", value="⚪ No configurado", inline=False)
+            
+        await ctx.send(embed=embed)
+
+async def setup(bot):
+    await bot.add_cog(AdminCog(bot))
         if not self.bot.get_command(cmd_name): await ctx.send(f"❌ No existe el comando `!{cmd_name}`."); return
         await db_execute("INSERT INTO permisos_comandos (user_id, nombre_comando) VALUES (%s, %s) ON CONFLICT (user_id, nombre_comando) DO NOTHING", (miembro.id, cmd_name))
         await ctx.send(f"🔑 ¡Llave entregada! {miembro.mention} ahora puede usar `!{cmd_name}`.")
