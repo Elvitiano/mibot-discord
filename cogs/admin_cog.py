@@ -3,7 +3,7 @@ from discord.ext import commands
 from datetime import datetime, date
 import json
 import io
-import sqlite3
+import psycopg2
 import asyncio
 from unidecode import unidecode
 from utils.db_manager import db_execute, get_db_connection
@@ -81,7 +81,7 @@ class AdminCog(commands.Cog, name="Administración"):
 
         # 2. Chequeo de Gemini AI
         try:
-            await self.bot.gemini_model.count_tokens("test")
+            self.bot.gemini_model.count_tokens("test")
             embed.add_field(name="IA (Gemini)", value="✅ Conectada", inline=False)
         except Exception as e:
             embed.add_field(name="IA (Gemini)", value=f"❌ Falló: {e}", inline=False)
@@ -154,4 +154,5 @@ class AdminCog(commands.Cog, name="Administración"):
             await ctx.send(f"✅ Anuncio enviado a {sent_count} canal(es).", delete_after=10)
 
 async def setup(bot):
+    await bot.add_cog(AdminCog(bot))
     await bot.add_cog(AdminCog(bot))

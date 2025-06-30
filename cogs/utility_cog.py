@@ -14,7 +14,7 @@ class UtilityCog(commands.Cog, name="Utilidad"):
         now = datetime.now()
         turno_key = get_turno_key()
         turno_display = TURNOS_DISPLAY.get(turno_key, "Desconocido")
-        await db_execute("INSERT INTO chats_guardados (user_id, user_name, message, timestamp, turno) VALUES (?, ?, ?, ?, ?)", (ctx.author.id, ctx.author.name, mensaje, now, turno_display))
+        await db_execute("INSERT INTO chats_guardados (user_id, user_name, message, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, ctx.author.name, mensaje, now, turno_display))
         await ctx.send(f"✅ ¡Mensaje guardado! (Turno: {turno_display})")
 
     @commands.command(name='buscar', help='Busca en la memoria. Uso: !buscar <término/fecha>')
@@ -22,17 +22,17 @@ class UtilityCog(commands.Cog, name="Utilidad"):
         sql_query, params, title = "", (), ""
         try:
             search_date = datetime.strptime(query, '%Y-%m-%d').date()
-            sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = ? ORDER BY timestamp ASC", (search_date,), f"Memoria del {search_date.strftime('%d-%m-%Y')}"
+            sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Memoria del {search_date.strftime('%d-%m-%Y')}"
         except ValueError:
             clean_query = query.lower().strip()
             if clean_query == 'hoy':
                 search_date = date.today()
-                sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = ? ORDER BY timestamp ASC", (search_date,), f"Memoria de hoy ({search_date.strftime('%d-%m-%Y')})"
+                sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Memoria de hoy ({search_date.strftime('%d-%m-%Y')})"
             elif clean_query == 'ayer':
                 search_date = date.today() - timedelta(days=1)
-                sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = ? ORDER BY timestamp ASC", (search_date,), f"Memoria de ayer ({search_date.strftime('%d-%m-%Y')})"
+                sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Memoria de ayer ({search_date.strftime('%d-%m-%Y')})"
             else:
-                sql_query, params, title = "SELECT * FROM chats_guardados WHERE LOWER(message) LIKE ? ORDER BY timestamp DESC", (f"%{query.lower()}%",), f"Resultados para: '{query}'"
+                sql_query, params, title = "SELECT * FROM chats_guardados WHERE LOWER(message) LIKE %s ORDER BY timestamp DESC", (f"%{query.lower()}%",), f"Resultados para: '{query}'"
         
         rows = await db_execute(sql_query, params, fetch='all')
         if not rows:
@@ -40,7 +40,7 @@ class UtilityCog(commands.Cog, name="Utilidad"):
         
         description = ""
         for r in rows:
-            description += f"**- {datetime.fromisoformat(r[4]).strftime('%H:%M')} por {r[2]}**: `{r[3]}`\n"
+            description += f"**- {r['timestamp'].strftime('%H:%M')} por {r['user_name']}**: `{r['message']}`\n"
         embed = discord.Embed(title=title, color=discord.Color.green())
         if len(description) > 4000:
             description = description[:4000] + "\n\n*[Resultados truncados por su longitud]*"
@@ -52,24 +52,24 @@ class UtilityCog(commands.Cog, name="Utilidad"):
         sql_query, params, title_prefix = "", (), ""
         try:
             search_date = datetime.strptime(query, '%Y-%m-%d').date()
-            sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = ? ORDER BY timestamp ASC", (search_date,), f"Resumen del {search_date.strftime('%d-%m-%Y')}"
+            sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Resumen del {search_date.strftime('%d-%m-%Y')}"
         except ValueError:
             clean_query = query.lower().strip()
             if clean_query == 'hoy':
                 search_date = date.today()
-                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = ? ORDER BY timestamp ASC", (search_date,), f"Resumen de hoy ({search_date.strftime('%d-%m-%Y')})"
+                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Resumen de hoy ({search_date.strftime('%d-%m-%Y')})"
             elif clean_query == 'ayer':
                 search_date = date.today() - timedelta(days=1)
-                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = ? ORDER BY timestamp ASC", (search_date,), f"Resumen de ayer ({search_date.strftime('%d-%m-%Y')})"
+                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Resumen de ayer ({search_date.strftime('%d-%m-%Y')})"
             else:
-                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE LOWER(message) LIKE ? ORDER BY timestamp DESC", (f"%{query.lower()}%",), f"Resumen sobre '{query}'"
+                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE LOWER(message) LIKE %s ORDER BY timestamp DESC", (f"%{query.lower()}%",), f"Resumen sobre '{query}'"
 
         async with ctx.typing():
             rows = await db_execute(sql_query, params, fetch='all')
             if not rows:
                 await ctx.send(f"🤔 No encontré nada que resumir para: **{query}**."); return
             
-            chat_log = "\n".join([f"{row[0]}: {row[1]}" for row in rows])
+            chat_log = "\n".join([f"{row['user_name']}: {row['message']}" for row in rows])
             if len(chat_log) > 15000: chat_log = chat_log[:15000]
 
             try:
@@ -84,7 +84,7 @@ class UtilityCog(commands.Cog, name="Utilidad"):
     @commands.command(name='crearcomando', help='Crea un comando personalizado.')
     @commands.has_permissions(administrator=True)
     async def crear_comando(self, ctx, nombre: str, *, respuesta: str):
-        await db_execute("INSERT OR REPLACE INTO comandos_dinamicos (nombre_comando, respuesta_comando, creador_id, creador_nombre) VALUES (?, ?, ?, ?)", (nombre.lower(), respuesta, ctx.author.id, ctx.author.name))
+        await db_execute("INSERT INTO comandos_dinamicos (nombre_comando, respuesta_comando, creador_id, creador_nombre) VALUES (%s, %s, %s, %s) ON CONFLICT (nombre_comando) DO UPDATE SET respuesta_comando = EXCLUDED.respuesta_comando, creador_id = EXCLUDED.creador_id, creador_nombre = EXCLUDED.creador_nombre", (nombre.lower(), respuesta, ctx.author.id, ctx.author.name))
         self.bot.dynamic_commands[nombre.lower()] = respuesta 
         await ctx.send(f"✅ ¡Comando `!{nombre.lower()}` creado/actualizado!")
 
@@ -92,7 +92,7 @@ class UtilityCog(commands.Cog, name="Utilidad"):
     @commands.has_permissions(administrator=True)
     async def borrar_comando(self, ctx, nombre: str):
         nombre = nombre.lower()
-        rows = await db_execute("DELETE FROM comandos_dinamicos WHERE nombre_comando = ?", (nombre,))
+        rows = await db_execute("DELETE FROM comandos_dinamicos WHERE nombre_comando = %s", (nombre,))
         if rows > 0:
             if nombre in self.bot.dynamic_commands: del self.bot.dynamic_commands[nombre]
             await ctx.send(f"✅ ¡Comando `!{nombre}` borrado!")
