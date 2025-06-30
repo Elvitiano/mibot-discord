@@ -1,5 +1,5 @@
 # =================================================================================
-# ||   CÓDIGO MAESTRO v101.5 - VERSIÓN MODULAR CON COGS                          ||
+# ||   CÓDIGO MAESTRO v101.6 - VERSIÓN PARA DEPLOY EN RENDER                     ||
 # =================================================================================
 
 print("--- [FASE 0] INICIANDO SCRIPT BOT.PY ---")
@@ -105,6 +105,22 @@ async def on_command_error(ctx, error):
         print(f"[ERROR NO MANEJADO] en comando '{ctx.command.name if ctx.command else 'desconocido'}': {type(error).__name__}: {error}")
         await ctx.send("Ocurrió un error inesperado. 😔")
 
+# --- Servidor Web para Mantener Activo en Render ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "El bot está vivo."
+
+def run_web_server():
+  port = int(os.environ.get('PORT', 8080))
+  print(f"--- [WEB] Iniciando servidor web en el puerto {port} ---")
+  app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_web_server)
+    t.start()
+
 # --- Función Principal de Ejecución ---
 async def main():
     async with bot:
@@ -124,23 +140,9 @@ async def main():
             print("--- [ERROR CRÍTICO] El token de Discord no es válido. Revisa tu archivo .env ---")
             sys.exit(1)
 
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "El bot está vivo."
-
-def run_web_server():
-  port = int(os.environ.get('PORT', 8080))
-  app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_web_server)
-    t.start()
-
 if __name__ == "__main__":
+    keep_alive()
     try:
-        keep_alive()
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n--- [INFO] Apagando el bot. ---")

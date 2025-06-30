@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, date
+import os
+import pytz
 
 TURNOS_DISPLAY = {
     "dia": "Día ☀️",
@@ -7,8 +9,14 @@ TURNOS_DISPLAY = {
 }
 
 def get_turno_key():
-    """Devuelve la clave del turno actual ('dia', 'tarde', 'noche')."""
-    hour = datetime.now().hour
+    """Devuelve la clave del turno actual ('dia', 'tarde', 'noche') usando la zona horaria configurada."""
+    try:
+        tz_str = os.getenv('TIMEZONE', 'UTC')
+        user_timezone = pytz.timezone(tz_str)
+    except pytz.UnknownTimeZoneError:
+        user_timezone = pytz.timezone('UTC')
+        
+    hour = datetime.now(user_timezone).hour
     if 7 <= hour < 15: return "dia"
     elif 15 <= hour < 23: return "tarde"
     else: return "noche"

@@ -3,6 +3,7 @@ from discord.ext import commands
 from datetime import datetime, timedelta, date
 import os
 import sqlite3
+import pytz
 import asyncio
 from utils.db_manager import db_execute
 from utils.helpers import get_turno_key, TURNOS_DISPLAY, parse_periodo
@@ -181,22 +182,51 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
     @commands.command(name='lm', help='Formatea y envía un LM. Uso: !lm <perfil> <mensaje>')
     async def lm(self, ctx, nombre_perfil: str, *, mensaje: str):
         nombre_perfil = nombre_perfil.lower()
+        
+        # 1. Verificar que el operador tiene asignado ese perfil
         asignacion = await db_execute("SELECT 1 FROM operador_perfil WHERE user_id = ? AND nombre_perfil = ?", (ctx.author.id, nombre_perfil), fetch='one')
         if not asignacion:
             await ctx.send(f"❌ No tienes asignado el perfil `{nombre_perfil}`. Usa `!misperfiles` para ver tus perfiles."); return
-        today_str, turno_key = date.today().isoformat(), get_turno_key()
+
+        # 2. Obtener el número de cambio y registrar el LM
+        turno_key = get_turno_key()
+        
+        # Usar la zona horaria correcta para el registro
+        try:
+            tz_str = os.getenv('TIMEZONE', 'UTC')
+            user_timezone = pytz.timezone(tz_str)
+        except pytz.UnknownTimeZoneError:
+            await ctx.send(f"⚠️ Zona horaria '{tz_str}' no reconocida. Usando UTC por defecto. Revisa la variable TIMEZONE en tu configuración.", delete_after=15)
+            user_timezone = pytz.timezone('UTC')
+            
+        now = datetime.now(user_timezone)
+        today_str = now.date().isoformat()
+
         count_row = await db_execute("SELECT COUNT(*) FROM lm_logs WHERE DATE(timestamp) = ? AND turno = ?", (today_str, turno_key), fetch='one')
         cambio_num = count_row[0] + 1
-        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (?, ?, ?, ?, ?)", (ctx.author.id, nombre_perfil, mensaje, datetime.now(), turno_key))
-        now = datetime.now()
-        h1_dt, h2_dt = now, now + timedelta(hours=1)
+        
+        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (?, ?, ?, ?, ?)", (ctx.author.id, nombre_perfil, mensaje, now, turno_key))
+
+        # 3. Calcular el rango de hora
+        h1_dt = now
+        h2_dt = now + timedelta(hours=1)
         h1_str = h1_dt.strftime('%#I' if os.name != 'nt' else '%I').lstrip('0') + h1_dt.strftime('%p').lower()
         h2_str = h2_dt.strftime('%#I' if os.name != 'nt' else '%I').lstrip('0') + h2_dt.strftime('%p').lower()
         time_range = f"{h1_str} - {h2_str}"
+
+        # 4. Obtener apodo del operador para el turno actual
         apodo_row = await db_execute(f"SELECT apodo_{turno_key} FROM apodos_operador WHERE user_id = ?", (ctx.author.id,), fetch='one')
         operador_name = apodo_row[0] if apodo_row and apodo_row[0] else ctx.author.name
+
+        # 5. Construir y enviar el mensaje final
         perfil_operador_str = f"{nombre_perfil.title()}/ {operador_name}"
-        mensaje_final = f"Cambio# {cambio_num} ({TURNOS_DISPLAY.get(turno_key)})   {time_range}\n{perfil_operador_str}\n\n😎 {mensaje}"
+        
+        mensaje_final = (
+            f"Cambio# {cambio_num} ({TURNOS_DISPLAY.get(turno_key)})   {time_range}\n"
+            f"{perfil_operador_str}\n\n"
+            f"😎 {mensaje}"
+        )
+        
         try:
             await ctx.message.delete()
             await ctx.send(mensaje_final)
@@ -302,9 +332,10 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
             await ctx.send(embed=embed); return
 
         description = ""
-        for author_id, log_message, ts in results:
+        for author_id, log_message, ts_str in results:
             author = ctx.guild.get_member(author_id)
             author_name = author.mention if author else f"ID: {author_id}"
+            ts = datetime.fromisoformat(ts_str)
             
             log_entry = (
                 f"**[{ts.strftime('%d/%m %H:%M')}] - Registrado por: {author_name}**\n"
