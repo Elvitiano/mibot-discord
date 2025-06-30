@@ -1,6 +1,17 @@
 # =================================================================================
 # ||   CÓDIGO MAESTRO v101.6 - VERSIÓN PARA DEPLOY EN RENDER                     ||
 # =================================================================================
+"""
+Este es el script principal que ejecuta el bot de Discord. Sus responsabilidades clave son:
+- Cargar configuraciones y claves de API desde variables de entorno.
+- Inicializar las conexiones con las APIs externas (Discord, Google Gemini, ElevenLabs).
+- Configurar la instancia del bot de Discord, incluyendo intenciones y prefijo de comando.
+- Manejar eventos globales del bot como 'on_ready', 'on_message', y 'on_command_error'.
+- Cargar dinámicamente todos los módulos de comandos (Cogs) desde la carpeta /cogs.
+- Implementar un sistema de comandos dinámicos que se cargan desde la base de datos.
+- Ejecutar un servidor web simple (Flask) para mantener el bot activo en plataformas de hosting como Render.
+- Gestionar el ciclo de vida del bot, incluyendo el inicio y el apagado seguro.
+"""
 
 print("--- [FASE 0] INICIANDO SCRIPT BOT.PY ---")
 import os
@@ -17,6 +28,7 @@ from threading import Thread
 from utils.db_manager import setup_database, db_execute
 
 # --- Carga y Configuración ---
+# Carga las variables de entorno desde el archivo .env para mantener las claves seguras.
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -28,6 +40,7 @@ if not DISCORD_TOKEN or not GEMINI_API_KEY:
     sys.exit(1)
 
 # --- Configuración de APIs y Bot ---
+# Configura la API de Gemini con la clave y ajustes de seguridad para permitir todo tipo de contenido.
 genai.configure(api_key=GEMINI_API_KEY)
 
 safety_settings = [
@@ -37,14 +50,17 @@ safety_settings = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
+# Define los 'intents' del bot, que son los permisos sobre qué eventos de Discord puede escuchar.
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
+# Crea la instancia principal del bot, definiendo el prefijo '!' para los comandos.
 bot = commands.Bot(command_prefix='!', intents=intents, case_insensitive=True, help_command=None)
 
 # --- Inicialización de Clientes y Modelos ---
 try:
+    # Inicializa el modelo de IA generativa de Gemini que se usará en los cogs.
     bot.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest', safety_settings=safety_settings)
     print("--- [CONFIG] Cliente de Gemini AI inicializado. ---")
 except Exception as e:
@@ -52,19 +68,29 @@ except Exception as e:
     sys.exit(1)
 
 if ELEVENLABS_API_KEY:
+    # Si se proporciona una clave de ElevenLabs, inicializa el cliente para funciones de texto a voz.
     bot.elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
     print("--- [CONFIG] Cliente de ElevenLabs inicializado. ---")
 else:
+    # Si no hay clave, se deshabilita la funcionalidad de audio.
     bot.elevenlabs_client = None
     print("--- [ADVERTENCIA] No se encontró ELEVENLABS_API_KEY. Los comandos de audio estarán deshabilitados. ---")
 
 # --- Estado Global del Bot ---
+# Diccionarios para almacenar estados que necesitan ser accesibles globalmente.
 bot.elevenlabs_voices = {}
 bot.dynamic_commands = {}
+bot.failed_cogs = [] # Lista para rastrear cogs que no se cargaron.
 
 # --- Eventos Principales del Bot ---
 @bot.event
 async def on_ready():
+    """
+    Se ejecuta una vez que el bot se ha conectado exitosamente a Discord.
+    - Configura la base de datos.
+    - Carga los comandos dinámicos desde la base de datos a la memoria.
+    - Imprime un mensaje de confirmación.
+    """
     await asyncio.to_thread(setup_database)
     # Cargar comandos dinámicos al iniciar
     try:
@@ -77,6 +103,12 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
+    """
+    Se ejecuta cada vez que se envía un mensaje en cualquier canal que el bot pueda ver.
+    - Ignora los mensajes de otros bots.
+    - Comprueba si el mensaje es un comando dinámico personalizado. Si lo es, envía la respuesta y termina.
+    - Si no es un comando dinámico, lo pasa al procesador de comandos estándar de discord.ext.
+    """
     if message.author.bot or not message.content.startswith(bot.command_prefix):
         return
     
@@ -89,6 +121,11 @@ async def on_message(message):
 
 @bot.event
 async def on_command_error(ctx, error):
+    """
+    Manejador de errores global para todos los comandos.
+    Proporciona respuestas amigables al usuario para errores comunes como comandos no encontrados,
+    cooldowns, permisos faltantes, etc., evitando que el bot se bloquee.
+    """
     if isinstance(error, commands.CommandNotFound):
         await ctx.send("🤔 Comando no reconocido.", delete_after=10)
     elif isinstance(error, commands.CommandOnCooldown):
@@ -106,6 +143,9 @@ async def on_command_error(ctx, error):
         await ctx.send("Ocurrió un error inesperado. 😔")
 
 # --- Servidor Web para Mantener Activo en Render ---
+# Esta sección crea un servidor web simple usando Flask.
+# El propósito es responder a las comprobaciones de estado de plataformas como Render,
+# asegurando que el servicio no se suspenda por inactividad.
 app = Flask(__name__)
 
 @app.route('/')
@@ -118,11 +158,18 @@ def run_web_server():
   app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
+    """Inicia el servidor web en un hilo separado para no bloquear el bot."""
     t = Thread(target=run_web_server)
     t.start()
 
 # --- Función Principal de Ejecución ---
 async def main():
+    """
+    Función principal asíncrona que prepara y ejecuta el bot.
+    - Carga todas las extensiones (cogs) de la carpeta /cogs.
+    - Inicia la conexión del bot a Discord usando el token.
+    - Maneja errores críticos de conexión.
+    """
     async with bot:
         # Cargar todos los cogs
         for filename in os.listdir('./cogs'):
@@ -132,6 +179,7 @@ async def main():
                     print(f'--- [COG] Cargado: {filename}')
                 except Exception as e:
                     print(f"--- [ERROR COG] No se pudo cargar {filename}: {e}")
+                    bot.failed_cogs.append((filename, str(e)))
         
         print("--- [FASE 0.6] Conectando a Discord... ---")
         try:
@@ -141,8 +189,11 @@ async def main():
             sys.exit(1)
 
 if __name__ == "__main__":
+    # Inicia el servidor web para mantener el bot activo.
     keep_alive()
     try:
+        # Ejecuta el bucle de eventos principal del bot.
         asyncio.run(main())
     except KeyboardInterrupt:
+        # Permite apagar el bot de forma limpia con Ctrl+C.
         print("\n--- [INFO] Apagando el bot. ---")

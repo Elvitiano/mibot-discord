@@ -27,6 +27,7 @@ class AdminCog(commands.Cog, name="Administración"):
         
         # 1. Chequeo de la Base de Datos
         try:
+            # Intenta obtener una conexión y cerrarla. Es la prueba más fiable.
             conn = get_db_connection()
             conn.close()
             embed.add_field(name="Base de Datos (Supabase)", value="✅ Conectada", inline=False)
@@ -35,6 +36,7 @@ class AdminCog(commands.Cog, name="Administración"):
 
         # 2. Chequeo de IA (Gemini)
         try:
+            # count_tokens es una llamada síncrona, no necesita 'await'.
             self.bot.gemini_model.count_tokens("test")
             embed.add_field(name="IA (Gemini)", value="✅ Operacional", inline=False)
         except Exception as e:
@@ -44,13 +46,20 @@ class AdminCog(commands.Cog, name="Administración"):
         if self.bot.elevenlabs_client:
             try:
                 # Es una llamada de red, se ejecuta en un hilo para no bloquear.
-                await asyncio.to_thread(self.bot.elevenlabs_client.voices.get_all)
+                await asyncio.to_thread(self.bot.elevenlabs_client.models.get_all)
                 embed.add_field(name="Audio (ElevenLabs)", value="✅ Operacional", inline=False)
             except Exception as e:
                 embed.add_field(name="Audio (ElevenLabs)", value=f"❌ Falló: {e}", inline=False)
         else:
             embed.add_field(name="Audio (ElevenLabs)", value="⚪ No configurado", inline=False)
             
+        # 4. Chequeo de Cogs
+        if not self.bot.failed_cogs:
+            embed.add_field(name="Módulos (Cogs)", value="✅ Todos cargados", inline=False)
+        else:
+            failed_cogs_str = "\n".join([f"- `{name}`: {error}" for name, error in self.bot.failed_cogs])
+            embed.add_field(name="Módulos (Cogs)", value=f"❌ Fallaron:\n{failed_cogs_str}", inline=False)
+
         await ctx.send(embed=embed)
 
     @commands.command(name='backup', help='Crea una copia de seguridad de la base de datos.')

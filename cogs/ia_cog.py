@@ -7,7 +7,14 @@ from PIL import Image
 from utils.db_manager import db_execute, get_ia_context
 
 class IACog(commands.Cog, name="IA"):
-    """Comandos que utilizan la IA de Gemini para análisis y generación de texto."""
+    """
+    Este Cog maneja todas las interacciones con la IA de Gemini y la gestión de 'personalidades' o 'perfiles'
+    que la IA puede adoptar. Incluye comandos para:
+    - Gestión de perfiles (crear, borrar, ver, listar).
+    - Gestión del historial/contexto de cada perfil.
+    - Gestión de reglas globales para la IA.
+    - El comando principal `reply` que usa la IA para analizar una imagen y generar una respuesta de texto.
+    """
     def __init__(self, bot):
         self.bot = bot
 
@@ -15,6 +22,12 @@ class IACog(commands.Cog, name="IA"):
     @commands.command(name='crearperfil', help='Crea uno o más perfiles. Uso: !crearperfil <nombre1> [nombre2] ...')
     @commands.has_permissions(administrator=True)
     async def crear_perfil(self, ctx, *, nombres: str):
+        """
+        Crea uno o más perfiles de personaje en la base de datos.
+        Solo los administradores pueden usar este comando.
+        Los nombres de perfil se guardan en minúsculas para evitar duplicados.
+        Informa al usuario qué perfiles se crearon y cuáles ya existían.
+        """
         if not nombres:
             await ctx.send("❌ Debes especificar al menos un nombre de perfil."); return
         nombres_lista = [n.lower() for n in nombres.split()]
@@ -37,6 +50,11 @@ class IACog(commands.Cog, name="IA"):
     @commands.command(name='agghistorial', help='Añade un dato al historial de un perfil.')
     @commands.has_permissions(administrator=True)
     async def agghistorial(self, ctx, nombre_perfil: str, *, dato: str):
+        """
+        Añade una pieza de información (un 'dato') al historial de un perfil existente.
+        Este historial se usará como contexto para la IA en el comando `reply`.
+        Solo los administradores pueden usar este comando.
+        """
         persona = await db_execute("SELECT id FROM personas WHERE nombre = %s", (nombre_perfil.lower(),), fetch='one')
         if persona:
             await db_execute("INSERT INTO datos_persona (persona_id, dato_texto) VALUES (%s, %s)", (persona['id'], dato))
@@ -46,6 +64,11 @@ class IACog(commands.Cog, name="IA"):
 
     @commands.command(name='verinfo', help='Muestra la información de un perfil.')
     async def ver_info(self, ctx, nombre_perfil: str):
+        """
+        Muestra todo el historial de datos asociado a un perfil específico.
+        La información se presenta en un embed de Discord para mayor claridad.
+        Cualquier usuario puede usar este comando.
+        """
         persona = await db_execute("SELECT id FROM personas WHERE nombre = %s", (nombre_perfil.lower(),), fetch='one')
         if not persona: await ctx.send(f"❌ No encontré el perfil `{nombre_perfil.lower()}`."); return
         datos = await db_execute("SELECT dato_texto FROM datos_persona WHERE persona_id = %s",(persona['id'],), fetch='all')
@@ -57,6 +80,12 @@ class IACog(commands.Cog, name="IA"):
     @commands.command(name='borrarperfil', help='Borra un perfil y todo su historial.')
     @commands.has_permissions(administrator=True)
     async def borrar_perfil(self, ctx, nombre_perfil: str):
+        """
+        Elimina permanentemente un perfil y todo su historial de la base de datos.
+        Debido a la configuración de la base de datos (ON DELETE CASCADE),
+        al borrar la persona se borran también sus datos asociados.
+        Solo los administradores pueden usar este comando.
+        """
         rows = await db_execute("DELETE FROM personas WHERE nombre = %s", (nombre_perfil.lower(),))
         if rows > 0:
             await ctx.send(f"✅ Perfil `{nombre_perfil.lower()}` y su historial eliminados.")
@@ -66,6 +95,12 @@ class IACog(commands.Cog, name="IA"):
     @commands.command(name='listaperfiles', aliases=['verperfiles'], help='Muestra todos los perfiles y a quién están asignados.')
     @commands.has_permissions(administrator=True)
     async def listaperfiles(self, ctx):
+        """
+        Lista todos los perfiles existentes en la base de datos.
+        Además, muestra a qué operadores (usuarios de Discord) está asignado cada perfil,
+        si es que hay alguna asignación.
+        Solo los administradores pueden usar este comando.
+        """
         perfiles = await db_execute("SELECT nombre FROM personas ORDER BY nombre ASC", fetch='all')
         if not perfiles:
             await ctx.send("No hay perfiles creados en la base de datos."); return
@@ -95,11 +130,21 @@ class IACog(commands.Cog, name="IA"):
     @commands.command(name='aggregla', help='Añade una regla para la IA.')
     @commands.has_permissions(administrator=True)
     async def aggregla(self, ctx, *, regla: str):
+        """
+        Añade una regla global que la IA deberá seguir en todas sus generaciones.
+        Estas reglas se añaden al final del prompt del sistema.
+        Solo los administradores pueden usar este comando.
+        """
         await db_execute("INSERT INTO reglas_ia (regla_texto) VALUES (%s)", (regla,))
         await ctx.send("✅ Nueva regla añadida a la IA.")
 
     @commands.command(name='listareglas', help='Muestra las reglas de la IA.')
     async def listareglas(self, ctx):
+        """
+        Muestra todas las reglas globales de la IA que están actualmente en la base de datos.
+        Cada regla se muestra con su ID, que se puede usar para borrarla.
+        Cualquier usuario puede usar este comando.
+        """
         reglas = await db_execute("SELECT id, regla_texto FROM reglas_ia ORDER BY id ASC", fetch='all')
         if not reglas: await ctx.send("No hay reglas personalizadas para la IA."); return
         embed = discord.Embed(title="Libro de Reglas de la IA", color=discord.Color.light_grey())
@@ -109,6 +154,10 @@ class IACog(commands.Cog, name="IA"):
     @commands.command(name='borrarregla', help='Borra una regla de la IA por su número.')
     @commands.has_permissions(administrator=True)
     async def borrarregla(self, ctx, regla_id: int):
+        """
+        Elimina una regla global de la IA usando su ID numérico.
+        Solo los administradores pueden usar este comando.
+        """
         rows = await db_execute("DELETE FROM reglas_ia WHERE id = %s", (regla_id,))
         if rows == 0: await ctx.send(f"🤔 No encontré una regla con el ID `{regla_id}`.")
         else: await ctx.send(f"✅ Regla `{regla_id}` borrada.")
@@ -117,6 +166,20 @@ class IACog(commands.Cog, name="IA"):
     @commands.command(name='reply', help='Usa un perfil para analizar una foto/bio.')
     @commands.cooldown(1, 120, commands.BucketType.user) 
     async def reply(self, ctx, nombre_perfil: str = None):
+        """
+        Comando principal de IA. Analiza una imagen adjunta y genera una respuesta de texto.
+        Tiene un cooldown de 120 segundos por usuario para evitar el abuso.
+
+        Pasos que sigue:
+        1. Valida que se haya adjuntado una imagen.
+        2. Muestra el indicador de "escribiendo..." para feedback al usuario.
+        3. Procesa la imagen: la lee, la convierte a RGB, la redimensiona y la prepara para la IA.
+        4. Obtiene el contexto de la IA: el historial del perfil (si se especifica) y las reglas globales.
+        5. Construye un prompt muy detallado y estructurado para guiar a la IA (Gemini).
+        6. Envía el prompt y la imagen a la IA.
+        7. Recibe la respuesta de la IA y la envía al canal de Discord.
+        8. Maneja posibles errores en cada paso.
+        """
         if not ctx.message.attachments:
             await ctx.send("❌ Debes adjuntar una imagen.", delete_after=10); self.reply.reset_cooldown(ctx); return
         attachment = ctx.message.attachments[0]
@@ -125,8 +188,10 @@ class IACog(commands.Cog, name="IA"):
         
         async with ctx.typing():
             try:
+                # --- 1. Procesamiento de la Imagen ---
                 image_bytes = await attachment.read()
                 
+                # Convertir, redimensionar y comprimir la imagen para optimizarla para la IA
                 with Image.open(io.BytesIO(image_bytes)) as img:
                     rgb_img = img.convert('RGB')
                     rgb_img.thumbnail((1024, 1024))
@@ -134,11 +199,14 @@ class IACog(commands.Cog, name="IA"):
                     rgb_img.save(buffer, format="JPEG")
                     image_bytes_procesados = buffer.getvalue()
 
+                # --- 2. Obtención de Contexto desde la BD ---
+                # Se recupera el historial del perfil y las reglas globales de la IA.
                 hoja_personaje, reglas_ia_rows = await get_ia_context(nombre_perfil)
                 
                 image_for_gemini = {'mime_type': 'image/jpeg', 'data': image_bytes_procesados}
                 
-                # --- PROMPT AVANZADO RESTAURADO ---
+                # --- 3. Construcción del Prompt Dinámico ---
+                # Este es el cerebro del comando. Define el rol, las reglas y el formato de salida de la IA.
                 prompt_dinamico = """**ROL Y OBJETIVO (Wingman Digital):** Tu rol es ser un 'Wingman Digital'. Debes ser ingenioso, observador y seguro, pero nunca arrogante. Tu objetivo es mezclar humor sutil con curiosidad genuina para crear openers de conversación únicos y listos para copiar y pegar.
 
 **REGLAS CRÍTICAS DE COMPORTAMIENTO:**
@@ -172,12 +240,15 @@ class IACog(commands.Cog, name="IA"):
 5.  Termina con una pregunta abierta que invite a compartir una anécdota o una reflexión ligera sobre citas. Ejemplo: "¿Cuál es la aventura más loca que te gustaría tener con alguien que conozcas aquí?"
 ---"""
 
+                # Se añade el contexto del perfil y las reglas al final del prompt base.
                 if hoja_personaje: prompt_dinamico += f"\n\n**CONTEXTO ADICIONAL (TU PERSONAJE):**\n{hoja_personaje}"
                 if reglas_ia_rows: prompt_dinamico += "\n\n**REGLAS ADICIONALES OBLIGATORIAS:**\n" + "\n".join(f"- {regla['regla_texto']}" for regla in reglas_ia_rows)
             
+                # --- 4. Llamada a la API de Gemini ---
                 response = await self.bot.gemini_model.generate_content_async([prompt_dinamico, image_for_gemini])
                 
-                # Accedemos al texto de la respuesta de forma segura
+                # --- 5. Envío de la Respuesta ---
+                # Accedemos al texto de la respuesta de forma segura y lo enviamos al canal.
                 try:
                     respuesta_texto = response.text
                     await ctx.send(respuesta_texto)
@@ -187,6 +258,7 @@ class IACog(commands.Cog, name="IA"):
 
 
             except Exception as e:
+                # --- 6. Manejo de Errores General ---
                 await ctx.send(f"Error general en el comando reply: {str(e)}")
                 print(f"Error general en el comando reply: {str(e)}")
 
