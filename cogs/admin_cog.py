@@ -43,7 +43,8 @@ class AdminCog(commands.Cog, name="Administración"):
         # 3. Chequeo de Audio (ElevenLabs)
         if self.bot.elevenlabs_client:
             try:
-                await asyncio.to_thread(self.bot.elevenlabs_client.models.get_all)
+                # Es una llamada de red, se ejecuta en un hilo para no bloquear.
+                await asyncio.to_thread(self.bot.elevenlabs_client.voices.get_all)
                 embed.add_field(name="Audio (ElevenLabs)", value="✅ Operacional", inline=False)
             except Exception as e:
                 embed.add_field(name="Audio (ElevenLabs)", value=f"❌ Falló: {e}", inline=False)
