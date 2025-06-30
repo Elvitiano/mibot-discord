@@ -67,7 +67,7 @@ class MyHelpCommand(commands.HelpCommand):
             "Audio (ElevenLabs)": ['sync_elevenlabs', 'audio', 'audiolab'],
             "Memoria del Bot": ['guardar', 'buscar', 'resumir'],
             "Tareas Programadas": ['programar', 'programar-ia', 'programar-serie', 'tareas', 'borrartarea'],
-            "Administración General": ['backup', 'privatizar', 'publicar', 'permitir', 'denegar', 'estado_comandos', 'anuncio', 'aggregla', 'listareglas', 'borrarregla', 'exportar-config', 'importar-config'],
+            "Administración General": ['backup', 'privatizar', 'publicar', 'permitir', 'denegar', 'estado_comandos', 'anuncio', 'aggregla', 'listareglas', 'borrarregla', 'exportar-config', 'importar-config', 'status'],
             "Comandos Personalizados": custom_cmds
         }
 

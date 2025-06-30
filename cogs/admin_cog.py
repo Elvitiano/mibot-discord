@@ -1,8 +1,17 @@
 import discord
 from discord.ext import commands
 from datetime import datetime, date
+import json
+import io
+import sqlite3
+import asyncio
 from unidecode import unidecode
-from utils.db_manager import db_execute
+from utils.db_manager import db_execute, get_db_connection
+
+TABLES_TO_MIGRATE = [
+    'personas', 'datos_persona', 'reglas_ia', 
+    'comandos_config', 'permisos_comandos'
+]
 
 class AdminCog(commands.Cog, name="Administración"):
     """Comandos para la administración del bot y del servidor."""
@@ -54,6 +63,39 @@ class AdminCog(commands.Cog, name="Administración"):
             estado_emoji = 'Privado 🔒' if estado_texto == 'privado' else 'Público 🌍'
             description += f"**`!{cmd.name}`**: {estado_emoji}\n"
         embed.description = description
+        await ctx.send(embed=embed)
+
+    @commands.command(name='status', help='Realiza un chequeo de salud del bot y sus conexiones.')
+    @commands.has_permissions(administrator=True)
+    async def status(self, ctx):
+        """Verifica el estado de las conexiones críticas del bot."""
+        embed = discord.Embed(title="🩺 Chequeo de Salud del Bot 🩺", color=discord.Color.blue())
+        
+        # 1. Chequeo de la Base de Datos
+        try:
+            conn = get_db_connection()
+            conn.close()
+            embed.add_field(name="Base de Datos (Supabase)", value="✅ Conectada", inline=False)
+        except Exception as e:
+            embed.add_field(name="Base de Datos (Supabase)", value=f"❌ Falló: {e}", inline=False)
+
+        # 2. Chequeo de Gemini AI
+        try:
+            await self.bot.gemini_model.count_tokens("test")
+            embed.add_field(name="IA (Gemini)", value="✅ Conectada", inline=False)
+        except Exception as e:
+            embed.add_field(name="IA (Gemini)", value=f"❌ Falló: {e}", inline=False)
+
+        # 3. Chequeo de ElevenLabs
+        if self.bot.elevenlabs_client:
+            try:
+                await asyncio.to_thread(self.bot.elevenlabs_client.models.get_all)
+                embed.add_field(name="Audio (ElevenLabs)", value="✅ Conectado", inline=False)
+            except Exception as e:
+                embed.add_field(name="Audio (ElevenLabs)", value=f"❌ Falló: {e}", inline=False)
+        else:
+            embed.add_field(name="Audio (ElevenLabs)", value="⚪ No configurado", inline=False)
+            
         await ctx.send(embed=embed)
 
     @commands.command(name='anuncio', help='Envía un anuncio. Uso: !anuncio <#canal...|todos|categoria> <mensaje>')
