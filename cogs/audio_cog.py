@@ -6,16 +6,25 @@ import io
 
 async def get_refined_script(ctx, original_text):
     base_prompt = f"""**Primary Task:** You are a dialogue processing AI. Your input is a text. Your output must be two processed versions of that text, separated by '---'.
+
 **CRITICAL RULE 1: Language Preservation**
-- Identify the language of the "ORIGINAL TEXT" below.
-- Your entire response MUST be in that exact same language.
-- DO NOT TRANSLATE the text. The output language must match the input language.
-**CRITICAL RULE 2: Content Refinement**
-- If you see instructions in parentheses like (sarcastic) or (sadly), rewrite the sentence to reflect that tone and remove the parenthetical instruction.
-- The final text should be between 40 and 60 words. If the original text is too short, expand it creatively while staying on topic.
-**CRITICAL RULE 3: Output Formatting**
-1.  **Version 1 (With Tags):** The first version should include speech tags like `[pause]`, `[laughs]`, or `[sighs]` to make it sound natural.
-2.  **Separator:** Use '---' to separate the two versions.
+- Identify the language of the "ORIGINAL TEXT" below (e.g., Spanish, English, French).
+- The dialogue of your response MUST be in that exact same language.
+- **DO NOT TRANSLATE** the dialogue.
+
+**CRITICAL RULE 2: Speech Tag Generation**
+- **All speech tags MUST be in English**, regardless of the input language. Examples: `[pause]`, `[laughs]`, `[sighs]`.
+- If you see instructions in parentheses like `(sarcastic)`, `(sadly)`, or `(cantando)`, you must:
+    1. Rewrite the sentence to reflect that tone or action.
+    2. Convert the instruction into an appropriate **English** speech tag. For example, `(cantando)` becomes `[singing]`.
+    3. Remove the original parenthesis instruction from the final text.
+
+**CRITICAL RULE 3: Content Refinement**
+- The final text should be between 40 and 60 words. If the original text is too short, expand it creatively while staying on topic and in the original language.
+
+**CRITICAL RULE 4: Output Formatting**
+1.  **Version 1 (With Tags):** The first version should include the English speech tags to make it sound natural.
+2.  **Separator:** Use `---` to separate the two versions.
 3.  **Version 2 (Clean):** The second version should be identical to the first, but with all speech tags (like `[pause]`) completely removed.
 4.  **DO NOT** include any titles, headers, or markdown like `**`."""
     

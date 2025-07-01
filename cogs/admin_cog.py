@@ -27,7 +27,6 @@ class AdminCog(commands.Cog, name="Administración"):
         
         # 1. Chequeo de la Base de Datos
         try:
-            # Intenta obtener una conexión y cerrarla. Es la prueba más fiable.
             conn = get_db_connection()
             conn.close()
             embed.add_field(name="Base de Datos (Supabase)", value="✅ Conectada", inline=False)
@@ -36,7 +35,6 @@ class AdminCog(commands.Cog, name="Administración"):
 
         # 2. Chequeo de IA (Gemini)
         try:
-            # count_tokens es una llamada síncrona, no necesita 'await'.
             self.bot.gemini_model.count_tokens("test")
             embed.add_field(name="IA (Gemini)", value="✅ Operacional", inline=False)
         except Exception as e:
@@ -45,8 +43,7 @@ class AdminCog(commands.Cog, name="Administración"):
         # 3. Chequeo de Audio (ElevenLabs)
         if self.bot.elevenlabs_client:
             try:
-                # Es una llamada de red, se ejecuta en un hilo para no bloquear.
-                await asyncio.to_thread(self.bot.elevenlabs_client.models.get_all)
+                await asyncio.to_thread(self.bot.elevenlabs_client.voices.get_all)
                 embed.add_field(name="Audio (ElevenLabs)", value="✅ Operacional", inline=False)
             except Exception as e:
                 embed.add_field(name="Audio (ElevenLabs)", value=f"❌ Falló: {e}", inline=False)

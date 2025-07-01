@@ -1,6 +1,8 @@
 import discord
 from discord.ext import commands
 from datetime import datetime, date, timedelta
+import os
+import pytz
 from utils.db_manager import db_execute
 from utils.helpers import get_turno_key, TURNOS_DISPLAY
 
@@ -11,7 +13,14 @@ class UtilityCog(commands.Cog, name="Utilidad"):
 
     @commands.command(name='guardar', help='Guarda un mensaje en la memoria.')
     async def guardar_chat(self, ctx, *, mensaje: str):
-        now = datetime.now()
+        # Usar la zona horaria configurada para consistencia
+        try:
+            tz_str = os.getenv('TIMEZONE', 'UTC')
+            user_timezone = pytz.timezone(tz_str)
+        except pytz.UnknownTimeZoneError:
+            user_timezone = pytz.timezone('UTC')
+            
+        now = datetime.now(user_timezone)
         turno_key = get_turno_key()
         turno_display = TURNOS_DISPLAY.get(turno_key, "Desconocido")
         await db_execute("INSERT INTO chats_guardados (user_id, user_name, message, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, ctx.author.name, mensaje, now, turno_display))
@@ -20,17 +29,25 @@ class UtilityCog(commands.Cog, name="Utilidad"):
     @commands.command(name='buscar', help='Busca en la memoria. Uso: !buscar <término/fecha>')
     async def buscar(self, ctx, *, query: str):
         sql_query, params, title = "", (), ""
+        
+        # Obtener la zona horaria para la consulta
+        tz_str = os.getenv('TIMEZONE', 'UTC')
+        
         try:
             search_date = datetime.strptime(query, '%Y-%m-%d').date()
-            sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Memoria del {search_date.strftime('%d-%m-%Y')}"
+            # Usamos AT TIME ZONE para asegurar que la comparación de fechas respete la zona horaria
+            sql_query = f"SELECT * FROM chats_guardados WHERE DATE(timestamp AT TIME ZONE '{tz_str}') = %s ORDER BY timestamp ASC"
+            params, title = (search_date,), f"Memoria del {search_date.strftime('%d-%m-%Y')}"
         except ValueError:
             clean_query = query.lower().strip()
             if clean_query == 'hoy':
-                search_date = date.today()
-                sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Memoria de hoy ({search_date.strftime('%d-%m-%Y')})"
+                search_date = datetime.now(pytz.timezone(tz_str)).date()
+                sql_query = f"SELECT * FROM chats_guardados WHERE DATE(timestamp AT TIME ZONE '{tz_str}') = %s ORDER BY timestamp ASC"
+                params, title = (search_date,), f"Memoria de hoy ({search_date.strftime('%d-%m-%Y')})"
             elif clean_query == 'ayer':
-                search_date = date.today() - timedelta(days=1)
-                sql_query, params, title = "SELECT * FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Memoria de ayer ({search_date.strftime('%d-%m-%Y')})"
+                search_date = (datetime.now(pytz.timezone(tz_str)) - timedelta(days=1)).date()
+                sql_query = f"SELECT * FROM chats_guardados WHERE DATE(timestamp AT TIME ZONE '{tz_str}') = %s ORDER BY timestamp ASC"
+                params, title = (search_date,), f"Memoria de ayer ({search_date.strftime('%d-%m-%Y')})"
             else:
                 sql_query, params, title = "SELECT * FROM chats_guardados WHERE LOWER(message) LIKE %s ORDER BY timestamp DESC", (f"%{query.lower()}%",), f"Resultados para: '{query}'"
         
@@ -40,7 +57,9 @@ class UtilityCog(commands.Cog, name="Utilidad"):
         
         description = ""
         for r in rows:
-            description += f"**- {r['timestamp'].strftime('%H:%M')} por {r['user_name']}**: `{r['message']}`\n"
+            # Convertir a la zona horaria local para mostrar
+            local_ts = r['timestamp'].astimezone(pytz.timezone(tz_str))
+            description += f"**- {local_ts.strftime('%H:%M')} por {r['user_name']}**: `{r['message']}`\n"
         embed = discord.Embed(title=title, color=discord.Color.green())
         if len(description) > 4000:
             description = description[:4000] + "\n\n*[Resultados truncados por su longitud]*"
@@ -50,17 +69,23 @@ class UtilityCog(commands.Cog, name="Utilidad"):
     @commands.command(name='resumir', help='Crea un resumen con IA de la memoria. Uso: !resumir <hoy/ayer/término>')
     async def resumir(self, ctx, *, query: str):
         sql_query, params, title_prefix = "", (), ""
+        
+        tz_str = os.getenv('TIMEZONE', 'UTC')
+
         try:
             search_date = datetime.strptime(query, '%Y-%m-%d').date()
-            sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Resumen del {search_date.strftime('%d-%m-%Y')}"
+            sql_query = f"SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp AT TIME ZONE '{tz_str}') = %s ORDER BY timestamp ASC"
+            params, title_prefix = (search_date,), f"Resumen del {search_date.strftime('%d-%m-%Y')}"
         except ValueError:
             clean_query = query.lower().strip()
             if clean_query == 'hoy':
-                search_date = date.today()
-                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Resumen de hoy ({search_date.strftime('%d-%m-%Y')})"
+                search_date = datetime.now(pytz.timezone(tz_str)).date()
+                sql_query = f"SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp AT TIME ZONE '{tz_str}') = %s ORDER BY timestamp ASC"
+                params, title_prefix = (search_date,), f"Resumen de hoy ({search_date.strftime('%d-%m-%Y')})"
             elif clean_query == 'ayer':
-                search_date = date.today() - timedelta(days=1)
-                sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp) = %s ORDER BY timestamp ASC", (search_date,), f"Resumen de ayer ({search_date.strftime('%d-%m-%Y')})"
+                search_date = (datetime.now(pytz.timezone(tz_str)) - timedelta(days=1)).date()
+                sql_query = f"SELECT user_name, message FROM chats_guardados WHERE DATE(timestamp AT TIME ZONE '{tz_str}') = %s ORDER BY timestamp ASC"
+                params, title_prefix = (search_date,), f"Resumen de ayer ({search_date.strftime('%d-%m-%Y')})"
             else:
                 sql_query, params, title_prefix = "SELECT user_name, message FROM chats_guardados WHERE LOWER(message) LIKE %s ORDER BY timestamp DESC", (f"%{query.lower()}%",), f"Resumen sobre '{query}'"
 

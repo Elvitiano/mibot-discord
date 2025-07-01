@@ -1,199 +1,422 @@
-# =================================================================================
-# ||   CÓDIGO MAESTRO v101.6 - VERSIÓN PARA DEPLOY EN RENDER                     ||
-# =================================================================================
-"""
-Este es el script principal que ejecuta el bot de Discord. Sus responsabilidades clave son:
-- Cargar configuraciones y claves de API desde variables de entorno.
-- Inicializar las conexiones con las APIs externas (Discord, Google Gemini, ElevenLabs).
-- Configurar la instancia del bot de Discord, incluyendo intenciones y prefijo de comando.
-- Manejar eventos globales del bot como 'on_ready', 'on_message', y 'on_command_error'.
-- Cargar dinámicamente todos los módulos de comandos (Cogs) desde la carpeta /cogs.
-- Implementar un sistema de comandos dinámicos que se cargan desde la base de datos.
-- Ejecutar un servidor web simple (Flask) para mantener el bot activo en plataformas de hosting como Render.
-- Gestionar el ciclo de vida del bot, incluyendo el inicio y el apagado seguro.
-"""
-
-print("--- [FASE 0] INICIANDO SCRIPT BOT.PY ---")
-import os
-import sys
-import asyncio
+# --- operator_cog.py ---
 import discord
 from discord.ext import commands
-import google.generativeai as genai
-from dotenv import load_dotenv
-from elevenlabs.client import ElevenLabs
-from flask import Flask
-from threading import Thread
+from datetime import datetime, timedelta, date
+import os
+import psycopg2
+import pytz
+from utils.db_manager import db_execute
+from utils.helpers import get_turno_key, TURNOS_DISPLAY, parse_periodo
 
-from utils.db_manager import setup_database, db_execute
+class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
+    """Comandos para la gestión de operadores, LMs y estadísticas."""
+    def __init__(self, bot):
+        self.bot = bot
 
-# --- Carga y Configuración ---
-# Carga las variables de entorno desde el archivo .env para mantener las claves seguras.
-load_dotenv()
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
-
-# Verificación de variables de entorno críticas
-if not DISCORD_TOKEN or not GEMINI_API_KEY:
-    print("--- [ERROR CRÍTICO] DISCORD_TOKEN y GEMINI_API_KEY deben estar definidos en el archivo .env ---")
-    sys.exit(1)
-
-# --- Configuración de APIs y Bot ---
-# Configura la API de Gemini con la clave y ajustes de seguridad para permitir todo tipo de contenido.
-genai.configure(api_key=GEMINI_API_KEY)
-
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
-
-# Define los 'intents' del bot, que son los permisos sobre qué eventos de Discord puede escuchar.
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-# Crea la instancia principal del bot, definiendo el prefijo '!' para los comandos.
-bot = commands.Bot(command_prefix='!', intents=intents, case_insensitive=True, help_command=None)
-
-# --- Inicialización de Clientes y Modelos ---
-try:
-    # Inicializa el modelo de IA generativa de Gemini que se usará en los cogs.
-    bot.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest', safety_settings=safety_settings)
-    print("--- [CONFIG] Cliente de Gemini AI inicializado. ---")
-except Exception as e:
-    print(f"--- [ERROR CRÍTICO] No se pudo inicializar el modelo de Gemini: {e}. El bot no puede iniciar. ---")
-    sys.exit(1)
-
-if ELEVENLABS_API_KEY:
-    # Si se proporciona una clave de ElevenLabs, inicializa el cliente para funciones de texto a voz.
-    bot.elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-    print("--- [CONFIG] Cliente de ElevenLabs inicializado. ---")
-else:
-    # Si no hay clave, se deshabilita la funcionalidad de audio.
-    bot.elevenlabs_client = None
-    print("--- [ADVERTENCIA] No se encontró ELEVENLABS_API_KEY. Los comandos de audio estarán deshabilitados. ---")
-
-# --- Estado Global del Bot ---
-# Diccionarios para almacenar estados que necesitan ser accesibles globalmente.
-bot.elevenlabs_voices = {}
-bot.dynamic_commands = {}
-bot.failed_cogs = [] # Lista para rastrear cogs que no se cargaron.
-
-# --- Eventos Principales del Bot ---
-@bot.event
-async def on_ready():
-    """
-    Se ejecuta una vez que el bot se ha conectado exitosamente a Discord.
-    - Configura la base de datos.
-    - Carga los comandos dinámicos desde la base de datos a la memoria.
-    - Imprime un mensaje de confirmación.
-    """
-    await asyncio.to_thread(setup_database)
-    # Cargar comandos dinámicos al iniciar
-    try:
-        records = await db_execute("SELECT nombre_comando, respuesta_comando FROM comandos_dinamicos", fetch='all')
-        bot.dynamic_commands = {row[0]: row[1] for row in records}
-        print(f"--- [FASE 1.1] {len(bot.dynamic_commands)} COMANDOS DINÁMICOS CARGADOS ---")
-    except Exception as e:
-        print(f"Error al cargar comandos dinámicos: {e}")
-    print(f'--- [FASE 1] BOT CONECTADO Y LISTO: {bot.user} ---')
-
-@bot.event
-async def on_message(message):
-    """
-    Se ejecuta cada vez que se envía un mensaje en cualquier canal que el bot pueda ver.
-    - Ignora los mensajes de otros bots.
-    - Comprueba si el mensaje es un comando dinámico personalizado. Si lo es, envía la respuesta y termina.
-    - Si no es un comando dinámico, lo pasa al procesador de comandos estándar de discord.ext.
-    """
-    if message.author.bot or not message.content.startswith(bot.command_prefix):
-        return
-    
-    command_name = message.content.split()[0][len(bot.command_prefix):].lower()
-    if command_name in bot.dynamic_commands:
-        await message.channel.send(bot.dynamic_commands[command_name])
-        return
+    @commands.command(name='apodo', help='Asigna un apodo a un usuario para un turno. Uso: !apodo <miembro> <dia|tarde|noche> <apodo>')
+    @commands.has_permissions(administrator=True)
+    async def apodo(self, ctx, miembro: discord.Member, turno: str, *, apodo_texto: str):
+        turno = turno.lower()
+        if turno not in ['dia', 'tarde', 'noche']:
+            await ctx.send("❌ Turno inválido. Usa `dia`, `tarde` o `noche`."); return
         
-    await bot.process_commands(message)
+        query = f"""
+            INSERT INTO apodos_operador (user_id, apodo_{turno}) VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET apodo_{turno} = EXCLUDED.apodo_{turno};
+        """
+        await db_execute(query, (miembro.id, apodo_texto))
+        await ctx.send(f"✅ Apodo de {miembro.mention} para el turno de **{turno}** establecido como `{apodo_texto}`.")
 
-@bot.event
-async def on_command_error(ctx, error):
-    """
-    Manejador de errores global para todos los comandos.
-    Proporciona respuestas amigables al usuario para errores comunes como comandos no encontrados,
-    cooldowns, permisos faltantes, etc., evitando que el bot se bloquee.
-    """
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send("🤔 Comando no reconocido.", delete_after=10)
-    elif isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ Enfriamiento. Intenta en **{round(error.retry_after, 1)}s**.", delete_after=10)
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"⚠️ Faltan argumentos. Revisa `!help {ctx.command.name}`.", delete_after=10)
-    elif isinstance(error, commands.MissingPermissions):
-        await ctx.send("🚫 No tienes permisos de Admin para este comando.", delete_after=10)
-    elif isinstance(error, commands.CheckFailure):
-        await ctx.send(f"🚫 No tienes llave o permiso para usar `!{ctx.command.name}`.", delete_after=10)
-    elif isinstance(error, commands.NotOwner):
-        await ctx.send("🚫 Este comando solo puede ser usado por el dueño del bot.", delete_after=10)
-    else:
-        print(f"[ERROR NO MANEJADO] en comando '{ctx.command.name if ctx.command else 'desconocido'}': {type(error).__name__}: {error}")
-        await ctx.send("Ocurrió un error inesperado. 😔")
+    @commands.command(name='verapodo', help='Muestra los apodos de un usuario.')
+    @commands.has_permissions(administrator=True)
+    async def verapodo(self, ctx, miembro: discord.Member):
+        apodos = await db_execute("SELECT apodo_dia, apodo_tarde, apodo_noche FROM apodos_operador WHERE user_id = %s", (miembro.id,), fetch='one')
+        embed = discord.Embed(title=f"Apodos de {miembro.name}", color=discord.Color.purple())
+        if apodos:
+            embed.add_field(name="Día ☀️", value=f"`{apodos['apodo_dia']}`" if apodos['apodo_dia'] else "No asignado", inline=True)
+            embed.add_field(name="Tarde 🌅", value=f"`{apodos['apodo_tarde']}`" if apodos['apodo_tarde'] else "No asignado", inline=True)
+            embed.add_field(name="Noche 🌑", value=f"`{apodos['apodo_noche']}`" if apodos['apodo_noche'] else "No asignado", inline=True)
+        else:
+            embed.description = "Este usuario no tiene apodos asignados."
+        await ctx.send(embed=embed)
 
-# --- Servidor Web para Mantener Activo en Render ---
-# Esta sección crea un servidor web simple usando Flask.
-# El propósito es responder a las comprobaciones de estado de plataformas como Render,
-# asegurando que el servicio no se suspenda por inactividad.
-app = Flask(__name__)
+    @commands.command(name='quitarapodo', help='Elimina el apodo de un usuario para un turno. Uso: !quitarapodo <miembro> <dia|tarde|noche>')
+    @commands.has_permissions(administrator=True)
+    async def quitarapodo(self, ctx, miembro: discord.Member, turno: str):
+        turno = turno.lower()
+        if turno not in ['dia', 'tarde', 'noche']:
+            await ctx.send("❌ Turno inválido. Usa `dia`, `tarde` o `noche`."); return
+        query = f"UPDATE apodos_operador SET apodo_{turno} = NULL WHERE user_id = %s AND apodo_{turno} IS NOT NULL"
+        rows = await db_execute(query, (miembro.id,))
+        if rows > 0:
+            await ctx.send(f"✅ Apodo de {miembro.mention} para el turno de **{turno}** eliminado.")
+        else:
+            await ctx.send(f"🤔 {miembro.mention} no tenía un apodo asignado para ese turno.")
 
-@app.route('/')
-def home():
-    return "El bot está vivo."
+    @commands.command(name='listaapodos', help='Muestra una lista de todos los apodos asignados.')
+    @commands.has_permissions(administrator=True)
+    async def listaapodos(self, ctx):
+        todos_los_apodos = await db_execute("SELECT user_id, apodo_dia, apodo_tarde, apodo_noche FROM apodos_operador", fetch='all')
+        if not todos_los_apodos:
+            await ctx.send("No hay apodos asignados a ningún operador."); return
+        embed = discord.Embed(title="📋 Lista de Apodos de Operadores", color=discord.Color.purple())
+        description = ""
+        for row in todos_los_apodos:
+            if not any([row['apodo_dia'], row['apodo_tarde'], row['apodo_noche']]): continue
+            miembro = ctx.guild.get_member(row['user_id'])
+            nombre_operador = miembro.mention if miembro else f"ID: {row['user_id']}"
+            dia_str = f"`{row['apodo_dia']}`" if row['apodo_dia'] else "N/A"
+            tarde_str = f"`{row['apodo_tarde']}`" if row['apodo_tarde'] else "N/A"
+            noche_str = f"`{row['apodo_noche']}`" if row['apodo_noche'] else "N/A"
+            description += f"**{nombre_operador}**\n☀️ **Día:** {dia_str} | 🌅 **Tarde:** {tarde_str} | 🌑 **Noche:** {noche_str}\n\n"
+        if not description:
+            await ctx.send("No hay apodos asignados a ningún operador."); return
+        if len(description) > 4000:
+            description = description[:4000] + "\n\n*[Resultados truncados]*"
+        embed.description = description
+        await ctx.send(embed=embed)
 
-def run_web_server():
-  port = int(os.environ.get('PORT', 8080))
-  print(f"--- [WEB] Iniciando servidor web en el puerto {port} ---")
-  app.run(host='0.0.0.0', port=port)
+    @commands.command(name='asignar', help='Asigna perfiles a operadores. Uso: !asignar <@op1> <perfil1> [@op2 <perfil2>...]')
+    @commands.has_permissions(administrator=True)
+    async def asignar(self, ctx, *, args: str):
+        parts = args.split()
+        if len(parts) < 2 or len(parts) % 2 != 0:
+            await ctx.send("❌ Formato incorrecto. Usa: `!asignar <@op1> <perfil1> [@op2 <perfil2>...]`"); return
+        pares = []
+        for i in range(0, len(parts), 2):
+            pares.append((parts[i], parts[i+1].lower()))
+        perfiles_a_verificar = list(set([p[1] for p in pares]))
+        placeholders = ','.join('%s' for _ in perfiles_a_verificar)
+        perfiles_existentes_rows = await db_execute(f"SELECT nombre FROM personas WHERE nombre IN ({placeholders})", tuple(perfiles_a_verificar), fetch='all')
+        nombres_perfiles_existentes = {row['nombre'] for row in perfiles_existentes_rows}
+        perfiles_no_encontrados = [p for p in perfiles_a_verificar if p not in nombres_perfiles_existentes]
+        if perfiles_no_encontrados:
+            await ctx.send(f"❌ Los siguientes perfiles no existen: `{', '.join(perfiles_no_encontrados)}`. Créalos primero con `!crearperfil`."); return
+        reporte = ""
+        for mencion, perfil in pares:
+            try:
+                miembro = await commands.MemberConverter().convert(ctx, mencion)
+                rows_affected = await db_execute("INSERT INTO operador_perfil (user_id, nombre_perfil) VALUES (%s, %s) ON CONFLICT (user_id, nombre_perfil) DO NOTHING", (miembro.id, perfil))
+                if rows_affected > 0:
+                    reporte += f"✅ **Asignado a {miembro.mention}**: `{perfil}`\n"
+                else:
+                    reporte += f"🤔 **{miembro.mention} ya tenía asignado**: `{perfil}`\n"
+            except commands.MemberNotFound:
+                reporte += f"⚠️ **No se encontró al miembro**: `{mencion}`\n"
+            except Exception as e:
+                reporte += f"❌ **Error con {mencion} y {perfil}**: {e}\n"
+        embed = discord.Embed(title="📝 Reporte de Asignación", color=discord.Color.blue())
+        embed.description = reporte if reporte else "No se realizaron asignaciones."
+        await ctx.send(embed=embed)
 
-def keep_alive():
-    """Inicia el servidor web en un hilo separado para no bloquear el bot."""
-    t = Thread(target=run_web_server)
-    t.start()
+    @commands.command(name='desasignar', help='Quita perfiles a operadores. Uso: !desasignar <@op1> <perfil1> [@op2 <perfil2>...]')
+    @commands.has_permissions(administrator=True)
+    async def desasignar(self, ctx, *, args: str):
+        parts = args.split()
+        if len(parts) < 2 or len(parts) % 2 != 0:
+            await ctx.send("❌ Formato incorrecto. Usa: `!desasignar <@op1> <perfil1> [@op2 <perfil2>...]`"); return
+        pares = []
+        for i in range(0, len(parts), 2):
+            pares.append((parts[i], parts[i+1].lower()))
+        reporte = ""
+        for mencion, perfil in pares:
+            try:
+                miembro = await commands.MemberConverter().convert(ctx, mencion)
+                rows = await db_execute("DELETE FROM operador_perfil WHERE user_id = %s AND nombre_perfil = %s", (miembro.id, perfil))
+                if rows > 0:
+                    reporte += f"✅ **Desasignado de {miembro.mention}**: `{perfil}`\n"
+                else:
+                    reporte += f"🤔 **{miembro.mention} no tenía asignado**: `{perfil}`\n"
+            except commands.MemberNotFound:
+                reporte += f"⚠️ **No se encontró al miembro**: `{mencion}`\n"
+            except Exception as e:
+                reporte += f"❌ **Error con {mencion} y {perfil}**: {e}\n"
+        embed = discord.Embed(title="📝 Reporte de Desasignación", color=discord.Color.orange())
+        embed.description = reporte if reporte else "No se realizaron desasignaciones."
+        await ctx.send(embed=embed)
 
-# --- Función Principal de Ejecución ---
-async def main():
-    """
-    Función principal asíncrona que prepara y ejecuta el bot.
-    - Carga todas las extensiones (cogs) de la carpeta /cogs.
-    - Inicia la conexión del bot a Discord usando el token.
-    - Maneja errores críticos de conexión.
-    """
-    async with bot:
-        # Cargar todos los cogs
-        for filename in os.listdir('./cogs'):
-            if filename.endswith('.py'):
-                try:
-                    await bot.load_extension(f'cogs.{filename[:-3]}')
-                    print(f'--- [COG] Cargado: {filename}')
-                except Exception as e:
-                    print(f"--- [ERROR COG] No se pudo cargar {filename}: {e}")
-                    bot.failed_cogs.append((filename, str(e)))
-        
-        print("--- [FASE 0.6] Conectando a Discord... ---")
+    @commands.command(name='sincronizar-perfiles', help='Asigna TODOS los perfiles a TODOS los operadores del servidor.')
+    @commands.has_permissions(administrator=True)
+    async def sincronizar_perfiles(self, ctx):
+        await ctx.send("⏳ Iniciando sincronización masiva... Esto puede tardar un momento.")
+        async with ctx.typing():
+            perfiles_rows = await db_execute("SELECT nombre FROM personas", fetch='all')
+            if not perfiles_rows:
+                await ctx.send("❌ No hay perfiles creados para asignar."); return
+            
+            perfiles_lista = [row['nombre'] for row in perfiles_rows]
+            operadores = [m for m in ctx.guild.members if not m.bot]
+            
+            print(f"[SYNC] Encontrados {len(perfiles_lista)} perfiles y {len(operadores)} operadores.")
+
+            if not operadores:
+                await ctx.send("❌ No se encontraron operadores en el servidor."); return
+
+            nuevas_asignaciones = 0
+            for operador in operadores:
+                for perfil in perfiles_lista:
+                    rows_affected = await db_execute(
+                        "INSERT INTO operador_perfil (user_id, nombre_perfil) VALUES (%s, %s) ON CONFLICT (user_id, nombre_perfil) DO NOTHING",
+                        (operador.id, perfil)
+                    )
+                    if rows_affected > 0:
+                        nuevas_asignaciones += 1
+            
+            print(f"[SYNC] Finalizado. Se realizaron {nuevas_asignaciones} nuevas asignaciones.")
+        await ctx.send(f"✅ Sincronización completada. Se realizaron **{nuevas_asignaciones}** nuevas asignaciones a **{len(operadores)}** operadores.")
+
+    @commands.command(name='desincronizar-perfiles', help='(PELIGRO) Elimina TODAS las asignaciones de perfiles.')
+    @commands.has_permissions(administrator=True)
+    async def desincronizar_perfiles(self, ctx):
+        embed = discord.Embed(title="⚠️ ADVERTENCIA DE SEGURIDAD ⚠️", description="Estás a punto de **eliminar TODAS las asignaciones de perfiles** para TODOS los operadores. Esta acción no se puede deshacer.\n\nReacciona con ✅ para confirmar en los próximos 30 segundos.", color=discord.Color.red())
+        confirm_msg = await ctx.send(embed=embed)
+        await confirm_msg.add_reaction("✅"); await confirm_msg.add_reaction("❌")
+        def check(reaction, user):
+            return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == confirm_msg.id
         try:
-            await bot.start(DISCORD_TOKEN)
-        except discord.errors.LoginFailure:
-            print("--- [ERROR CRÍTICO] El token de Discord no es válido. Revisa tu archivo .env ---")
-            sys.exit(1)
+            reaction, _ = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+            if str(reaction.emoji) == "✅":
+                await confirm_msg.edit(content="⏳ Procediendo con la desincronización masiva...", embed=None, view=None)
+                rows_deleted = await db_execute("DELETE FROM operador_perfil")
+                await confirm_msg.edit(content=f"✅ Desincronización completada. Se eliminaron **{rows_deleted}** asignaciones de perfiles.")
+            else:
+                await confirm_msg.edit(content="❌ Operación cancelada.", embed=None, view=None)
+        except asyncio.TimeoutError:
+            await confirm_msg.edit(content="❌ Tiempo de espera agotado. Operación cancelada.", embed=None, view=None)
 
-if __name__ == "__main__":
-    # Inicia el servidor web para mantener el bot activo.
-    keep_alive()
-    try:
-        # Ejecuta el bucle de eventos principal del bot.
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        # Permite apagar el bot de forma limpia con Ctrl+C.
-        print("\n--- [INFO] Apagando el bot. ---")
+    @commands.command(name='misperfiles', help='Muestra los perfiles asignados. Uso: !misperfiles [miembro]')
+    async def misperfiles(self, ctx, miembro: discord.Member = None):
+        target_user = miembro or ctx.author
+        perfiles = await db_execute("SELECT nombre_perfil FROM operador_perfil WHERE user_id = %s ORDER BY nombre_perfil ASC", (target_user.id,), fetch='all')
+        if perfiles:
+            lista_perfiles = "\n".join([f"- `{p['nombre_perfil']}`" for p in perfiles])
+            embed = discord.Embed(title=f"Perfiles de {target_user.name}", description=lista_perfiles, color=discord.Color.blue())
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(f"🤔 {target_user.name} no tiene perfiles asignados.")
+
+    @commands.command(name='lm', help='Formatea y envía un LM. Uso: !lm <perfil> <mensaje>')
+    async def lm(self, ctx, nombre_perfil: str, *, mensaje: str):
+        nombre_perfil = nombre_perfil.lower()
+        
+        asignacion = await db_execute("SELECT 1 FROM operador_perfil WHERE user_id = %s AND nombre_perfil = %s", (ctx.author.id, nombre_perfil), fetch='one')
+        if not asignacion:
+            await ctx.send(f"❌ No tienes asignado el perfil `{nombre_perfil}`. Usa `!misperfiles` para ver tus perfiles."); return
+
+        turno_key = get_turno_key()
+        
+        try:
+            tz_str = os.getenv('TIMEZONE', 'UTC')
+            user_timezone = pytz.timezone(tz_str)
+        except pytz.UnknownTimeZoneError:
+            await ctx.send(f"⚠️ Zona horaria '{tz_str}' no reconocida. Usando UTC por defecto. Revisa la variable TIMEZONE en tu configuración.", delete_after=15)
+            user_timezone = pytz.timezone('UTC')
+            
+        now = datetime.now(user_timezone)
+        today_str = now.date().isoformat()
+
+        count_row = await db_execute("SELECT COUNT(*) FROM lm_logs WHERE DATE(timestamp AT TIME ZONE %s) = %s AND turno = %s", (tz_str, today_str, turno_key), fetch='one')
+        cambio_num = count_row['count'] + 1
+        
+        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, nombre_perfil, mensaje, now, turno_key))
+
+        h1_dt = now
+        h2_dt = now + timedelta(hours=1)
+        h1_str = h1_dt.strftime('%#I' if os.name != 'nt' else '%I').lstrip('0') + h1_dt.strftime('%p').lower()
+        h2_str = h2_dt.strftime('%#I' if os.name != 'nt' else '%I').lstrip('0') + h2_dt.strftime('%p').lower()
+        time_range = f"{h1_str} - {h2_str}"
+
+        apodo_row = await db_execute(f"SELECT apodo_{turno_key} FROM apodos_operador WHERE user_id = %s", (ctx.author.id,), fetch='one')
+        operador_name = apodo_row[f'apodo_{turno_key}'] if apodo_row and apodo_row[f'apodo_{turno_key}'] else ctx.author.name
+
+        perfil_operador_str = f"{nombre_perfil.title()}/ {operador_name}"
+        
+        mensaje_final = (
+            f"Cambio# {cambio_num} ({TURNOS_DISPLAY.get(turno_key)})   {time_range}\n"
+            f"{perfil_operador_str}\n\n"
+            f"😎 {mensaje}"
+        )
+        
+        try:
+            await ctx.message.delete()
+            await ctx.send(mensaje_final)
+        except discord.Forbidden:
+            await ctx.send("⚠️ No tengo permisos para borrar tu comando, pero aquí está tu LM:", delete_after=10)
+            await ctx.send(mensaje_final)
+        except Exception as e:
+            await ctx.send(f"❌ Ocurrió un error inesperado al enviar el LM. Error: {e}")
+
+    @commands.command(name='exito', help='Registra un log de éxito. Uso: !exito <texto del log>')
+    async def exito(self, ctx, *, log_message: str):
+        """Registra una interacción exitosa en la base de datos."""
+        await db_execute(
+            "INSERT INTO exitos_logs (author_id, log_message, timestamp) VALUES (%s, %s, %s)",
+            (ctx.author.id, log_message, datetime.now(pytz.utc))
+        )
+        await ctx.message.add_reaction('🎉')
+        await ctx.send(f"¡Éxito registrado!\n```{log_message}```", delete_after=20)
+
+    # --- MÓDULO DE ESTADÍSTICAS ---
+    @commands.command(name='estadisticas', aliases=['stats'], help='Muestra estadísticas de LM. Uso: !stats [periodo] [filtro]')
+    @commands.has_permissions(administrator=True)
+    async def estadisticas(self, ctx, periodo: str = 'hoy', *, filtro: str = None):
+        where_clauses, params, title_periodo = parse_periodo(periodo)
+        if not where_clauses:
+            await ctx.send(f"❌ {title_periodo}"); return
+        
+        title = f"Estadísticas {title_periodo}"
+
+        if filtro:
+            filtro_lower = filtro.lower()
+            if filtro_lower in ['dia', 'tarde', 'noche']:
+                where_clauses.append("turno = %s")
+                params.append(filtro_lower)
+                title += f" (Turno: {filtro_lower.title()})"
+            else:
+                try:
+                    miembro = await commands.MemberConverter().convert(ctx, filtro)
+                    where_clauses.append("user_id = %s")
+                    params.append(miembro.id)
+                    title += f" (Operador: {miembro.display_name})"
+                except commands.MemberNotFound:
+                    user_ids_rows = await db_execute("SELECT user_id FROM apodos_operador WHERE apodo_dia LIKE %s OR apodo_tarde LIKE %s OR apodo_noche LIKE %s", (f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'), fetch='all')
+                    if user_ids_rows:
+                        ids = [row['user_id'] for row in user_ids_rows]
+                        placeholders = ','.join('%s' for _ in ids)
+                        where_clauses.append(f"user_id IN ({placeholders})")
+                        params.extend(ids)
+                        title += f" (Apodo: {filtro})"
+                    else:
+                        await ctx.send(f"🤔 No encontré ningún operador con la mención o apodo `{filtro}`."); return
+
+        query = f"SELECT user_id, turno, COUNT(*) as count FROM lm_logs WHERE {' AND '.join(where_clauses)} GROUP BY user_id, turno ORDER BY COUNT(*) DESC"
+        results = await db_execute(query, tuple(params), fetch='all')
+        
+        embed = discord.Embed(title=f"📊 {title}", color=discord.Color.green())
+        if not results:
+            embed.description = "No se encontraron registros para los criterios seleccionados."
+            await ctx.send(embed=embed); return
+
+        total_lms = sum(row['count'] for row in results)
+        embed.description = f"**Total de LMs:** {total_lms}\n\n**Desglose por Operador y Turno:**"
+        stats_by_user = {}
+        for row in results:
+            user_id, turno, count = row['user_id'], row['turno'], row['count']
+            if user_id not in stats_by_user: stats_by_user[user_id] = {'total': 0, 'turnos': {}}
+            stats_by_user[user_id]['total'] += count
+            stats_by_user[user_id]['turnos'][turno] = count
+        
+        sorted_users = sorted(stats_by_user.items(), key=lambda item: item[1]['total'], reverse=True)
+        description_body = ""
+        for user_id, data in sorted_users:
+            miembro = ctx.guild.get_member(user_id)
+            nombre_operador = miembro.mention if miembro else f"ID: {user_id}"
+            turnos_str_parts = [f"☀️ {data['turnos']['dia']}" if 'dia' in data['turnos'] else "", f"🌅 {data['turnos']['tarde']}" if 'tarde' in data['turnos'] else "", f"🌑 {data['turnos']['noche']}" if 'noche' in data['turnos'] else ""]
+            turnos_str = ' | '.join(filter(None, turnos_str_parts))
+            description_body += f"**{nombre_operador}**: {data['total']} LMs en total ({turnos_str})\n"
+        
+        embed.description += "\n" + description_body
+        await ctx.send(embed=embed)
+
+    @commands.command(name='verexitos', help='Muestra los logs de éxito. Uso: !verexitos [periodo] [filtro]')
+    @commands.has_permissions(administrator=True)
+    async def verexitos(self, ctx, periodo: str = 'hoy', *, filtro: str = None):
+        where_clauses, params, title_periodo = parse_periodo(periodo)
+        if not where_clauses:
+            await ctx.send(f"❌ {title_periodo}"); return
+            
+        title = f"Registro de Éxitos {title_periodo}"
+
+        if filtro:
+            where_clauses.append("log_message LIKE %s")
+            params.append(f"%%{filtro}%%")
+            title += f" (Filtro: {filtro})"
+
+        query = f"SELECT author_id, log_message, timestamp FROM exitos_logs WHERE {' AND '.join(where_clauses)} ORDER BY timestamp DESC"
+        results = await db_execute(query, tuple(params), fetch='all')
+
+        embed = discord.Embed(title=f"🏆 {title}", color=discord.Color.gold())
+        if not results:
+            embed.description = "No se encontraron registros de éxitos para los criterios seleccionados."
+            await ctx.send(embed=embed); return
+
+        description = ""
+        for row in results:
+            author = ctx.guild.get_member(row['author_id'])
+            author_name = author.mention if author else f"ID: {row['author_id']}"
+            ts = row['timestamp']
+            
+            log_entry = (
+                f"**[{ts.strftime('%d/%m %H:%M')}] - Registrado por: {author_name}**\n"
+                f"> {row['log_message']}\n\n"
+            )
+            
+            
+            if len(description) + len(log_entry) > 4000:
+                description += "*[Resultados truncados por su longitud]*"; break
+            description += log_entry
+            
+        embed.description = description
+        await ctx.send(embed=embed)
+
+    @commands.command(name='registrolm', aliases=['verlms'], help='Muestra los LMs enviados. Uso: !registrolm [periodo] [filtro]')
+    @commands.has_permissions(administrator=True)
+    async def registrolm(self, ctx, periodo: str = 'hoy', *, filtro: str = None):
+        where_clauses, params, title_periodo = parse_periodo(periodo)
+        if not where_clauses:
+            await ctx.send(f"❌ {title_periodo}"); return
+            
+        title = f"Registro de LMs {title_periodo}"
+
+        if filtro:
+            filtro_lower = filtro.lower()
+            if filtro_lower in ['dia', 'tarde', 'noche']:
+                where_clauses.append("turno = %s")
+                params.append(filtro_lower)
+                title += f" (Turno: {filtro_lower.title()})"
+            else:
+                try:
+                    miembro = await commands.MemberConverter().convert(ctx, filtro)
+                    where_clauses.append("user_id = %s")
+                    params.append(miembro.id)
+                    title += f" (Operador: {miembro.display_name})"
+                except commands.MemberNotFound:
+                    user_ids_rows = await db_execute("SELECT user_id FROM apodos_operador WHERE apodo_dia LIKE %s OR apodo_tarde LIKE %s OR apodo_noche LIKE %s", (f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'), fetch='all')
+                    if user_ids_rows:
+                        ids = [row['user_id'] for row in user_ids_rows]
+                        placeholders = ','.join('%s' for _ in ids)
+                        where_clauses.append(f"user_id IN ({placeholders})")
+                        params.extend(ids)
+                        title += f" (Apodo: {filtro})"
+                    else:
+                        await ctx.send(f"🤔 No encontré ningún operador con la mención o apodo `{filtro}`."); return
+
+        query = f"SELECT user_id, perfil_usado, message_content, timestamp FROM lm_logs WHERE {' AND '.join(where_clauses)} ORDER BY timestamp DESC"
+        results = await db_execute(query, tuple(params), fetch='all')
+
+        embed = discord.Embed(title=f"📜 {title}", color=discord.Color.orange())
+        if not results:
+            embed.description = "No se encontraron LMs para los criterios seleccionados."
+            await ctx.send(embed=embed); return
+
+        description = ""
+        for row in results:
+            ts = row['timestamp']
+            miembro = ctx.guild.get_member(row['user_id'])
+            nombre_operador = miembro.mention if miembro else f"ID: {row['user_id']}
+            
+            log_entry = (
+                f"**[{ts.strftime('%H:%M')}] - Perfil: `{row['perfil_usado']}` | Op: {nombre_operador}**\n"
+                f"> {row['message_content']}\n\n"
+            )
+            
+            if len(description) + len(log_entry) > 4000:
+                description += "*[Resultados truncados por su longitud]*"
+                break
+            description += log_entry
+            
+        embed.description = description
+        await ctx.send(embed=embed)
+
+async def setup(bot):
+    await bot.add_cog(OperatorCog(bot))
