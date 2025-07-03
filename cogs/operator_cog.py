@@ -195,21 +195,36 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
         else:
             await ctx.send(f"🤔 {target_user.name} no tiene perfiles asignados.")
 
-    @commands.command(name='lm', help='Formatea y envía un LM. Uso: !lm <perfil> <mensaje>')
-    async def lm(self, ctx, nombre_perfil: str, *, mensaje: str):
-        nombre_perfil = nombre_perfil.lower()
-        
-        asignacion = await db_execute("SELECT 1 FROM operador_perfil WHERE user_id = %s AND nombre_perfil = %s", (ctx.author.id, nombre_perfil), fetch='one')
-        if not asignacion:
-            await ctx.send(f"❌ No tienes asignado el perfil `{nombre_perfil}`. Usa `!misperfiles` para ver tus perfiles."); return
+    @commands.command(name='lm', help='Formatea y envía un LM. Uso: !lm [perfil] <mensaje>')
+    async def lm(self, ctx, *, args: str):
+        if not args:
+            await ctx.send("❌ Debes escribir un mensaje.", delete_after=10)
+            return
 
+        parts = args.split(maxsplit=1)
+        possible_profile = parts[0].lower()
+        
+        nombre_perfil = None
+        mensaje = args
+
+        # Verifica si la primera palabra es un perfil asignado al usuario
+        asignacion = await db_execute("SELECT 1 FROM operador_perfil WHERE user_id = %s AND nombre_perfil = %s", (ctx.author.id, possible_profile), fetch='one')
+        
+        if asignacion:
+            if len(parts) > 1:
+                nombre_perfil = possible_profile
+                mensaje = parts[1]
+            else:
+                await ctx.send(f"❌ Escribiste el perfil `{possible_profile}` pero olvidaste el mensaje.", delete_after=10)
+                return
+        
         turno_key = get_turno_key()
         
         try:
             tz_str = os.getenv('TIMEZONE', 'UTC')
             user_timezone = pytz.timezone(tz_str)
         except pytz.UnknownTimeZoneError:
-            await ctx.send(f"⚠️ Zona horaria '{tz_str}' no reconocida. Usando UTC por defecto. Revisa la variable TIMEZONE en tu configuración.", delete_after=15)
+            await ctx.send(f"⚠️ Zona horaria '{tz_str}' no reconocida. Usando UTC por defecto.", delete_after=15)
             user_timezone = pytz.timezone('UTC')
             
         now = datetime.now(user_timezone)
@@ -218,7 +233,8 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
         count_row = await db_execute("SELECT COUNT(*) FROM lm_logs WHERE DATE(timestamp AT TIME ZONE %s) = %s AND turno = %s", (tz_str, today_str, turno_key), fetch='one')
         cambio_num = count_row['count'] + 1
         
-        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, nombre_perfil, mensaje, now, turno_key))
+        perfil_a_loguear = nombre_perfil if nombre_perfil else 'N/A'
+        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, perfil_a_loguear, mensaje, now, turno_key))
 
         h1_dt = now
         h2_dt = now + timedelta(hours=1)
@@ -226,16 +242,19 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
         h2_str = h2_dt.strftime('%#I' if os.name != 'nt' else '%I').lstrip('0') + h2_dt.strftime('%p').lower()
         time_range = f"{h1_str} - {h2_str}"
 
-        apodo_row = await db_execute(f"SELECT apodo_{turno_key} FROM apodos_operador WHERE user_id = %s", (ctx.author.id,), fetch='one')
-        operador_name = apodo_row[f'apodo_{turno_key}'] if apodo_row and apodo_row[f'apodo_{turno_key}'] else ctx.author.name
-
-        perfil_operador_str = f"{nombre_perfil.title()}/ {operador_name}"
+        header = f"Cambio# {cambio_num} ({TURNOS_DISPLAY.get(turno_key)})   {time_range}"
         
-        mensaje_final = (
-            f"Cambio# {cambio_num} ({TURNOS_DISPLAY.get(turno_key)})   {time_range}\n"
-            f"{perfil_operador_str}\n\n"
-            f"😎 {mensaje}"
-        )
+        # Construir la línea de perfil/operador solo si es necesario
+        info_line = ""
+        if nombre_perfil:
+            apodo_row = await db_execute(f"SELECT apodo_{turno_key} FROM apodos_operador WHERE user_id = %s", (ctx.author.id,), fetch='one')
+            operador_name = apodo_row[f'apodo_{turno_key}'] if apodo_row and apodo_row[f'apodo_{turno_key}'] else ctx.author.name
+            info_line = f"{nombre_perfil.title()}/ {operador_name}"
+
+        if info_line:
+            mensaje_final = f"{header}\n{info_line}\n\n😎 {mensaje}"
+        else:
+            mensaje_final = f"{header}\n\n😎 {mensaje}"
         
         try:
             await ctx.message.delete()
@@ -391,7 +410,7 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
                     else:
                         await ctx.send(f"🤔 No encontré ningún operador con la mención o apodo `{filtro}`."); return
 
-        query = f"SELECT user_id, perfil_usado, message_content, timestamp FROM lm_logs WHERE {' AND '.join(where_clauses)} ORDER BY timestamp DESC"
+        query = f"SELECT user_id, perfil_usado, message_content, timestamp, turno FROM lm_logs WHERE {' AND '.join(where_clauses)} ORDER BY timestamp DESC"
         results = await db_execute(query, tuple(params), fetch='all')
 
         embed = discord.Embed(title=f"📜 {title}", color=discord.Color.orange())
@@ -399,14 +418,26 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
             embed.description = "No se encontraron LMs para los criterios seleccionados."
             await ctx.send(embed=embed); return
 
+        # Obtener todos los apodos de una vez para optimizar
+        all_apodos_rows = await db_execute("SELECT user_id, apodo_dia, apodo_tarde, apodo_noche FROM apodos_operador", fetch='all')
+        apodos_map = {row['user_id']: row for row in all_apodos_rows}
+
         description = ""
         for row in results:
             ts = row['timestamp']
             miembro = ctx.guild.get_member(row['user_id'])
-            nombre_operador = miembro.mention if miembro else f"ID: {row['user_id']}
+            
+            # Determinar el nombre del operador, usando el apodo actual si existe
+            operador_name = miembro.mention if miembro else f"ID: {row['user_id']}"
+            turno_log = row['turno']
+            user_apodos = apodos_map.get(row['user_id'])
+            if user_apodos and user_apodos.get(f'apodo_{turno_log}'):
+                operador_name = user_apodos[f'apodo_{turno_log}']
+
+            perfil_str = f"Perfil: `{row['perfil_usado']}` | " if row['perfil_usado'] != 'N/A' else ""
             
             log_entry = (
-                f"**[{ts.strftime('%H:%M')}] - Perfil: `{row['perfil_usado']}` | Op: {nombre_operador}**\n"
+                f"**[{ts.strftime('%H:%M')}] - {perfil_str}Op: {operador_name}**\n"
                 f"> {row['message_content']}\n\n"
             )
             

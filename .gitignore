@@ -158,3 +158,12 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Ignorar la base de datos local de SQLite
+memoria_bot.db
+
+# Ignorar las variables de entorno locales
+.env
+
+# Ignorar las carpetas de caché de Python
+__pycache__/
