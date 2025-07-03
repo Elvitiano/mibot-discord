@@ -1,10 +1,41 @@
 import discord
 from discord.ext import commands
 import psycopg2
+import psycopg2.extras
 import io
 import asyncio
 from PIL import Image
-from utils.db_manager import db_execute, get_ia_context
+from utils.db_manager import db_execute, get_db_connection
+
+def process_image_and_db_for_reply(nombre_perfil, attachment_bytes):
+    """
+    Obtiene el contexto de IA y procesa la imagen.
+    Esta es una función síncrona diseñada para ser ejecutada en un hilo separado.
+    """
+    hoja_personaje = ""
+    reglas_ia = []
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT regla_texto FROM reglas_ia ORDER BY id ASC")
+            reglas_ia = cur.fetchall()
+            if nombre_perfil:
+                cur.execute("SELECT id FROM personas WHERE nombre = %s", (nombre_perfil.lower(),))
+                persona_result = cur.fetchone()
+                if not persona_result:
+                    raise ValueError(f"No encontré el perfil `{nombre_perfil.lower()}`.")
+                cur.execute("SELECT dato_texto FROM datos_persona WHERE persona_id = %s", (persona_result['id'],))
+                datos_persona = cur.fetchall()
+                hoja_personaje = f"**TU PERSONAJE:**\nTú eres '{nombre_perfil}'.\n" + "\n".join(f"- {dato['dato_texto']}" for dato in datos_persona)
+    finally:
+        conn.close()
+    
+    with Image.open(io.BytesIO(attachment_bytes)) as img:
+        rgb_img = img.convert('RGB')
+        rgb_img.thumbnail((1024, 1024))
+        buffer = io.BytesIO()
+        rgb_img.save(buffer, format="JPEG")
+        return hoja_personaje, reglas_ia, buffer.getvalue()
 
 class IACog(commands.Cog, name="IA"):
     """

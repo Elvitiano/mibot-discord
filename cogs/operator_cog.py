@@ -3,8 +3,8 @@ import discord
 from discord.ext import commands
 from datetime import datetime, timedelta, date
 import os
+import psycopg2
 import pytz
-import asyncio
 from utils.db_manager import db_execute
 from utils.helpers import get_turno_key, TURNOS_DISPLAY, parse_periodo
 
@@ -233,7 +233,7 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
         count_row = await db_execute("SELECT COUNT(*) FROM lm_logs WHERE DATE(timestamp AT TIME ZONE %s) = %s AND turno = %s", (tz_str, today_str, turno_key), fetch='one')
         cambio_num = count_row['count'] + 1
         
-        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, perfil_a_loguear, mensaje, now, turno_key))
+        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, nombre_perfil if nombre_perfil else 'N/A', mensaje, now, turno_key))
 
         # 3. Calcular el rango de hora con minutos
         h1_dt = now
@@ -248,6 +248,9 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
         # 4. Obtener apodo del operador para el turno actual
         apodo_row = await db_execute(f"SELECT apodo_{turno_key} FROM apodos_operador WHERE user_id = %s", (ctx.author.id,), fetch='one')
         operador_name = apodo_row[f'apodo_{turno_key}'] if apodo_row and apodo_row[f'apodo_{turno_key}'] else ctx.author.name
+
+        # Definir el encabezado (header) para el LM
+        header = f"LM #{cambio_num} | {TURNOS_DISPLAY.get(turno_key, turno_key.title())} | {time_range}"
 
         if nombre_perfil:
             mensaje_final = f"{header}\n{nombre_perfil.title()}/ {operador_name}\n\n😎 {mensaje}"

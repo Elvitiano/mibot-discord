@@ -60,15 +60,3 @@ async def db_execute(query, params=(), fetch=None):
                 conn.close()
                 
     return await asyncio.to_thread(blocking_db_call)
-
-async def get_ia_context(nombre_perfil):
-    """Obtiene el contexto de IA (reglas y hoja de personaje) de la base de datos."""
-    reglas_ia = await db_execute("SELECT regla_texto FROM reglas_ia ORDER BY id ASC", fetch='all')
-    hoja_personaje = ""
-    if nombre_perfil:
-        persona_result = await db_execute("SELECT id FROM personas WHERE nombre = %s", (nombre_perfil.lower(),), fetch='one')
-        if not persona_result:
-            raise ValueError(f"No encontré el perfil `{nombre_perfil.lower()}`.")
-        datos_persona = await db_execute("SELECT dato_texto FROM datos_persona WHERE persona_id = %s", (persona_result['id'],), fetch='all')
-        hoja_personaje = f"**TU PERSONAJE:**\nTú eres '{nombre_perfil}'.\n" + "\n".join(f"- {dato['dato_texto']}" for dato in datos_persona)
-    return hoja_personaje, reglas_ia
