@@ -1,5 +1,5 @@
 # =================================================================================
-# ||   CÓDIGO MAESTRO v101.6 - VERSIÓN PARA DEPLOY EN RENDER                     ||
+# ||   CÓDIGO MAESTRO v102.0 - VERSIÓN CON POSTGRESQL                            ||
 # =================================================================================
 """
 Este es el script principal que ejecuta el bot de Discord. Sus responsabilidades clave son:
@@ -33,10 +33,11 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Verificación de variables de entorno críticas
-if not DISCORD_TOKEN or not GEMINI_API_KEY:
-    print("--- [ERROR CRÍTICO] DISCORD_TOKEN y GEMINI_API_KEY deben estar definidos en el archivo .env ---")
+if not all([DISCORD_TOKEN, GEMINI_API_KEY, DATABASE_URL]):
+    print("--- [ERROR CRÍTICO] DISCORD_TOKEN, GEMINI_API_KEY, y DATABASE_URL deben estar definidos. ---")
     sys.exit(1)
 
 # --- Configuración de APIs y Bot ---
