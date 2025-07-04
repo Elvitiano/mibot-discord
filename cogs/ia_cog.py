@@ -7,6 +7,24 @@ import asyncio
 from PIL import Image
 from utils.db_manager import db_execute, get_db_connection
 
+async def get_ia_context(nombre_perfil):
+    """
+    Recupera el historial del perfil (hoja_personaje) y las reglas globales de la IA desde la base de datos.
+    Devuelve una tupla (hoja_personaje, reglas_ia_rows).
+    """
+    hoja_personaje = ""
+    reglas_ia = []
+    # Obtener reglas de IA
+    reglas_ia = await db_execute("SELECT regla_texto FROM reglas_ia ORDER BY id ASC", fetch='all')
+    # Obtener hoja de personaje si hay perfil
+    if nombre_perfil:
+        persona = await db_execute("SELECT id FROM personas WHERE nombre = %s", (nombre_perfil.lower(),), fetch='one')
+        if not persona:
+            raise ValueError(f"No encontré el perfil `{nombre_perfil.lower()}`.")
+        datos_persona = await db_execute("SELECT dato_texto FROM datos_persona WHERE persona_id = %s", (persona['id'],), fetch='all')
+        hoja_personaje = f"**TU PERSONAJE:**\nTú eres '{nombre_perfil}'.\n" + "\n".join(f"- {dato['dato_texto']}" for dato in datos_persona)
+    return hoja_personaje, reglas_ia
+
 def process_image_and_db_for_reply(nombre_perfil, attachment_bytes):
     """
     Obtiene el contexto de IA y procesa la imagen.
