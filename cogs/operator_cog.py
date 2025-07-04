@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, date
 import os
 import psycopg2
 import pytz
+from asyncio import TimeoutError
 from utils.db_manager import db_execute
 from utils.helpers import get_turno_key, TURNOS_DISPLAY, parse_periodo
 
@@ -181,7 +182,7 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
                 await confirm_msg.edit(content=f"✅ Desincronización completada. Se eliminaron **{rows_deleted}** asignaciones de perfiles.")
             else:
                 await confirm_msg.edit(content="❌ Operación cancelada.", embed=None, view=None)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await confirm_msg.edit(content="❌ Tiempo de espera agotado. Operación cancelada.", embed=None, view=None)
 
     @commands.command(name='misperfiles', help='Muestra los perfiles asignados. Uso: !misperfiles [miembro]')
@@ -233,27 +234,31 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
         count_row = await db_execute("SELECT COUNT(*) FROM lm_logs WHERE DATE(timestamp AT TIME ZONE %s) = %s AND turno = %s", (tz_str, today_str, turno_key), fetch='one')
         cambio_num = count_row['count'] + 1
         
-        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, nombre_perfil if nombre_perfil else 'N/A', mensaje, now, turno_key))
+        perfil_a_loguear = nombre_perfil if nombre_perfil else 'N/A'
+        await db_execute("INSERT INTO lm_logs (user_id, perfil_usado, message_content, timestamp, turno) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, perfil_a_loguear, mensaje, now, turno_key))
 
-        # 3. Calcular el rango de hora con minutos
+        # --- Construcción del mensaje final ---
+        
+        # 1. Rango de hora
         h1_dt = now
         h2_dt = now + timedelta(hours=1)
-        
-        # Formatear para que se vea como "1:42 am" en lugar de "1am"
         h1_str = h1_dt.strftime('%I:%M %p').lstrip('0').lower()
         h2_str = h2_dt.strftime('%I:%M %p').lstrip('0').lower()
-        
         time_range = f"{h1_str} - {h2_str}"
 
-        # 4. Obtener apodo del operador para el turno actual
-        apodo_row = await db_execute(f"SELECT apodo_{turno_key} FROM apodos_operador WHERE user_id = %s", (ctx.author.id,), fetch='one')
-        operador_name = apodo_row[f'apodo_{turno_key}'] if apodo_row and apodo_row[f'apodo_{turno_key}'] else ctx.author.name
+        # 2. Encabezado
+        header = f"Cambio# {cambio_num} ({TURNOS_DISPLAY.get(turno_key)})   {time_range}"
 
-        # Definir el encabezado (header) para el LM
-        header = f"LM #{cambio_num} | {TURNOS_DISPLAY.get(turno_key, turno_key.title())} | {time_range}"
-
+        # 3. Línea de información (opcional)
+        info_line = ""
         if nombre_perfil:
-            mensaje_final = f"{header}\n{nombre_perfil.title()}/ {operador_name}\n\n😎 {mensaje}"
+            apodo_row = await db_execute(f"SELECT apodo_{turno_key} FROM apodos_operador WHERE user_id = %s", (ctx.author.id,), fetch='one')
+            operador_name = apodo_row[f'apodo_{turno_key}'] if apodo_row and apodo_row[f'apodo_{turno_key}'] else ctx.author.name
+            info_line = f"{nombre_perfil.title()}/ {operador_name}"
+
+        # 4. Mensaje final
+        if info_line:
+            mensaje_final = f"{header}\n{info_line}\n\n😎 {mensaje}"
         else:
             mensaje_final = f"{header}\n\n😎 {mensaje}"
         
@@ -267,185 +272,21 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
             await ctx.send(f"❌ Ocurrió un error inesperado al enviar el LM. Error: {e}")
 
     @commands.command(name='exito', help='Registra un log de éxito. Uso: !exito <texto del log>')
-    async def exito(self, ctx, *, log_message: str):
-        """Registra una interacción exitosa en la base de datos."""
-        await db_execute(
-            "INSERT INTO exitos_logs (author_id, log_message, timestamp) VALUES (%s, %s, %s)",
-            (ctx.author.id, log_message, datetime.now(pytz.utc))
-        )
-        await ctx.message.add_reaction('🎉')
-        await ctx.send(f"¡Éxito registrado!\n```{log_message}```", delete_after=20)
+    async def exito(self, ctx, *, texto_log: str):
+        if not texto_log:
+            await ctx.send("❌ El texto del log no puede estar vacío.", delete_after=10)
+            return
 
-    # --- MÓDULO DE ESTADÍSTICAS ---
-    @commands.command(name='estadisticas', aliases=['stats'], help='Muestra estadísticas de LM. Uso: !stats [periodo] [filtro]')
-    @commands.has_permissions(administrator=True)
-    async def estadisticas(self, ctx, periodo: str = 'hoy', *, filtro: str = None):
-        where_clauses, params, title_periodo = parse_periodo(periodo)
-        if not where_clauses:
-            await ctx.send(f"❌ {title_periodo}"); return
+        try:
+            tz_str = os.getenv('TIMEZONE', 'UTC')
+            user_timezone = pytz.timezone(tz_str)
+        except pytz.UnknownTimeZoneError:
+            await ctx.send(f"⚠️ Zona horaria '{tz_str}' no reconocida. Usando UTC por defecto.", delete_after=15)
+            user_timezone = pytz.timezone('UTC')
         
-        title = f"Estadísticas {title_periodo}"
-
-        if filtro:
-            filtro_lower = filtro.lower()
-            if filtro_lower in ['dia', 'tarde', 'noche']:
-                where_clauses.append("turno = %s")
-                params.append(filtro_lower)
-                title += f" (Turno: {filtro_lower.title()})"
-            else:
-                try:
-                    miembro = await commands.MemberConverter().convert(ctx, filtro)
-                    where_clauses.append("user_id = %s")
-                    params.append(miembro.id)
-                    title += f" (Operador: {miembro.display_name})"
-                except commands.MemberNotFound:
-                    user_ids_rows = await db_execute("SELECT user_id FROM apodos_operador WHERE apodo_dia LIKE %s OR apodo_tarde LIKE %s OR apodo_noche LIKE %s", (f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'), fetch='all')
-                    if user_ids_rows:
-                        ids = [row['user_id'] for row in user_ids_rows]
-                        placeholders = ','.join('%s' for _ in ids)
-                        where_clauses.append(f"user_id IN ({placeholders})")
-                        params.extend(ids)
-                        title += f" (Apodo: {filtro})"
-                    else:
-                        await ctx.send(f"🤔 No encontré ningún operador con la mención o apodo `{filtro}`."); return
-
-        query = f"SELECT user_id, turno, COUNT(*) as count FROM lm_logs WHERE {' AND '.join(where_clauses)} GROUP BY user_id, turno ORDER BY COUNT(*) DESC"
-        results = await db_execute(query, tuple(params), fetch='all')
+        now = datetime.now(user_timezone)
+        await db_execute("INSERT INTO exito_logs (user_id, texto_log, timestamp) VALUES (%s, %s, %s)", (ctx.author.id, texto_log, now))
+        await ctx.send("✅ Log de éxito registrado.", delete_after=10)
         
-        embed = discord.Embed(title=f"📊 {title}", color=discord.Color.green())
-        if not results:
-            embed.description = "No se encontraron registros para los criterios seleccionados."
-            await ctx.send(embed=embed); return
-
-        total_lms = sum(row['count'] for row in results)
-        embed.description = f"**Total de LMs:** {total_lms}\n\n**Desglose por Operador y Turno:**"
-        stats_by_user = {}
-        for row in results:
-            user_id, turno, count = row['user_id'], row['turno'], row['count']
-            if user_id not in stats_by_user: stats_by_user[user_id] = {'total': 0, 'turnos': {}}
-            stats_by_user[user_id]['total'] += count
-            stats_by_user[user_id]['turnos'][turno] = count
-        
-        sorted_users = sorted(stats_by_user.items(), key=lambda item: item[1]['total'], reverse=True)
-        description_body = ""
-        for user_id, data in sorted_users:
-            miembro = ctx.guild.get_member(user_id)
-            nombre_operador = miembro.mention if miembro else f"ID: {user_id}"
-            turnos_str_parts = [f"☀️ {data['turnos']['dia']}" if 'dia' in data['turnos'] else "", f"🌅 {data['turnos']['tarde']}" if 'tarde' in data['turnos'] else "", f"🌑 {data['turnos']['noche']}" if 'noche' in data['turnos'] else ""]
-            turnos_str = ' | '.join(filter(None, turnos_str_parts))
-            description_body += f"**{nombre_operador}**: {data['total']} LMs en total ({turnos_str})\n"
-        
-        embed.description += "\n" + description_body
-        await ctx.send(embed=embed)
-
-    @commands.command(name='verexitos', help='Muestra los logs de éxito. Uso: !verexitos [periodo] [filtro]')
-    @commands.has_permissions(administrator=True)
-    async def verexitos(self, ctx, periodo: str = 'hoy', *, filtro: str = None):
-        where_clauses, params, title_periodo = parse_periodo(periodo)
-        if not where_clauses:
-            await ctx.send(f"❌ {title_periodo}"); return
-            
-        title = f"Registro de Éxitos {title_periodo}"
-
-        if filtro:
-            where_clauses.append("log_message LIKE %s")
-            params.append(f"%%{filtro}%%")
-            title += f" (Filtro: {filtro})"
-
-        query = f"SELECT author_id, log_message, timestamp FROM exitos_logs WHERE {' AND '.join(where_clauses)} ORDER BY timestamp DESC"
-        results = await db_execute(query, tuple(params), fetch='all')
-
-        embed = discord.Embed(title=f"🏆 {title}", color=discord.Color.gold())
-        if not results:
-            embed.description = "No se encontraron registros de éxitos para los criterios seleccionados."
-            await ctx.send(embed=embed); return
-
-        description = ""
-        for row in results:
-            author = ctx.guild.get_member(row['author_id'])
-            author_name = author.mention if author else f"ID: {row['author_id']}"
-            ts = row['timestamp']
-            
-            log_entry = (
-                f"**[{ts.strftime('%d/%m %H:%M')}] - Registrado por: {author_name}**\n"
-                f"> {row['log_message']}\n\n"
-            )
-            
-            
-            if len(description) + len(log_entry) > 4000:
-                description += "*[Resultados truncados por su longitud]*"; break
-            description += log_entry
-            
-        embed.description = description
-        await ctx.send(embed=embed)
-
-    @commands.command(name='registrolm', aliases=['verlms'], help='Muestra los LMs enviados. Uso: !registrolm [periodo] [filtro]')
-    @commands.has_permissions(administrator=True)
-    async def registrolm(self, ctx, periodo: str = 'hoy', *, filtro: str = None):
-        where_clauses, params, title_periodo = parse_periodo(periodo)
-        if not where_clauses:
-            await ctx.send(f"❌ {title_periodo}"); return
-            
-        title = f"Registro de LMs {title_periodo}"
-
-        if filtro:
-            filtro_lower = filtro.lower()
-            if filtro_lower in ['dia', 'tarde', 'noche']:
-                where_clauses.append("turno = %s")
-                params.append(filtro_lower)
-                    miembro = await commands.MemberConverter().convert(ctx, filtro)
-                    where_clauses.append("user_id = %s")
-                    params.append(miembro.id)
-                    title += f" (Operador: {miembro.display_name})"
-                except commands.MemberNotFound:
-                    user_ids_rows = await db_execute("SELECT user_id FROM apodos_operador WHERE apodo_dia LIKE %s OR apodo_tarde LIKE %s OR apodo_noche LIKE %s", (f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'), fetch='all')
-                    if user_ids_rows:
-                        ids = [row['user_id'] for row in user_ids_rows]
-                        placeholders = ','.join('%s' for _ in ids)
-                        where_clauses.append(f"user_id IN ({placeholders})")
-                        params.extend(ids)
-                        title += f" (Apodo: {filtro})"
-                    else:
-                        await ctx.send(f"🤔 No encontré ningún operador con la mención o apodo `{filtro}`."); return
-
-        query = f"SELECT user_id, perfil_usado, message_content, timestamp, turno FROM lm_logs WHERE {' AND '.join(where_clauses)} ORDER BY timestamp DESC"
-        results = await db_execute(query, tuple(params), fetch='all')
-
-        embed = discord.Embed(title=f"📜 {title}", color=discord.Color.orange())
-        if not results:
-            embed.description = "No se encontraron LMs para los criterios seleccionados."
-            await ctx.send(embed=embed); return
-
-        # Obtener todos los apodos de una vez para optimizar
-        all_apodos_rows = await db_execute("SELECT user_id, apodo_dia, apodo_tarde, apodo_noche FROM apodos_operador", fetch='all')
-        apodos_map = {row['user_id']: row for row in all_apodos_rows}
-
-        description = ""
-        for row in results:
-            ts = row['timestamp']
-            miembro = ctx.guild.get_member(row['user_id'])
-            
-            # Determinar el nombre del operador, usando el apodo actual si existe
-            operador_name = miembro.mention if miembro else f"ID: {row['user_id']}"
-            turno_log = row['turno']
-            user_apodos = apodos_map.get(row['user_id'])
-            if user_apodos and user_apodos.get(f'apodo_{turno_log}'):
-                operador_name = user_apodos[f'apodo_{turno_log}']
-
-            perfil_str = f"Perfil: `{row['perfil_usado']}` | " if row['perfil_usado'] != 'N/A' else ""
-            
-            log_entry = (
-                f"**[{ts.strftime('%H:%M')}] - {perfil_str}Op: {operador_name}**\n"
-                f"> {row['message_content']}\n\n"
-            )
-            
-            if len(description) + len(log_entry) > 4000:
-                description += "*[Resultados truncados por su longitud]*"
-                break
-            description += log_entry
-            
-        embed.description = description
-        await ctx.send(embed=embed)
-
 async def setup(bot):
     await bot.add_cog(OperatorCog(bot))
