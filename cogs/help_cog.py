@@ -60,8 +60,9 @@ class MyHelpCommand(commands.HelpCommand):
         es_admin = self.context.author.guild_permissions.administrator
         
         all_categories = {
-            "Gestión de Operadores": ['apodo', 'verapodo', 'quitarapodo', 'listaapodos', 'asignar', 'desasignar', 'misperfiles', 'lm', 'sincronizar-perfiles', 'desincronizar-perfiles'],
-            "Estadísticas y Registros": ['estadisticas', 'registrolm', 'exito', 'verexitos'],
+            "Gestión de Operadores": ['apodo', 'verapodo', 'quitarapodo', 'listaapodos', 'asignar', 'desasignar', 'misperfiles', 'sincronizar-perfiles', 'desincronizar-perfiles'],
+            "Registro de Actividad": ['lm', 'exito'],
+            "Estadísticas": ['estadisticas', 'registrolm', 'verexitos'],
             "Gestión de Perfiles (IA)": ['crearperfil', 'borrarperfil', 'listaperfiles', 'agghistorial', 'verinfo'],
             "Análisis con IA": ['reply', 'consejo', 'preguntar'],
             "Audio (ElevenLabs)": ['sync_elevenlabs', 'audio', 'audiolab'],

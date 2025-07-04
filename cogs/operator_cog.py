@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, date
 import os
 import psycopg2
 import pytz
-import asyncio
 from utils.db_manager import db_execute
 from utils.helpers import get_turno_key, TURNOS_DISPLAY, parse_periodo
 
@@ -394,9 +393,6 @@ class OperatorCog(commands.Cog, name="Operadores y Estadísticas"):
             if filtro_lower in ['dia', 'tarde', 'noche']:
                 where_clauses.append("turno = %s")
                 params.append(filtro_lower)
-                title += f" (Turno: {filtro_lower.title()})"
-            else:
-                try:
                     miembro = await commands.MemberConverter().convert(ctx, filtro)
                     where_clauses.append("user_id = %s")
                     params.append(miembro.id)
